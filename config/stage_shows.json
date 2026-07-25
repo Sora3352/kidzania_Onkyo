@@ -1,0 +1,17 @@
+{
+  "_comment": "ステージショー手動再生ボタンの一覧。GUI上にlabelでボタンが表示され、押すとfilesの1本目からフルスクリーン再生します。filesは複数指定可(例: ファッションショーのMV1/MV2…)。2本目以降がある場合はGUIに「次のMV」ボタンが表示され、押すと次のfileへ切り替わります。fileはmedia_rootからの相対パス。実際のファイル名は運用担当者に確認のうえ書き換えてください。",
+  "shows": [
+    {
+      "id": "dance_show",
+      "label": "ダンスショー",
+      "files": ["stage_shows/シーケンス 02_1.mp4"],
+      "volume": 100
+    },
+    {
+      "id": "fashion_show",
+      "label": "ファッションショー",
+      "files": ["stage_shows/fashion_show.mp4"],
+      "volume": 90
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+"""キッザニア館内音響自動化システム エントリーポイント。"""
+from __future__ import annotations
+
+import ctypes
+import msvcrt
+import sys
+import tkinter as tk
+from pathlib import Path
+from tkinter import messagebox
+
+from .config import AppConfig
+from .gui import MainWindow
+from .logging_setup import setup_logging
+from .scheduler import JobScheduler
+
+# Windows: スリープ/画面消灯を抑止するためのフラグ
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
+
+
+def _base_dir() -> Path:
+    # src/kidzania_sound/main.py から見てプロジェクトルートは2階層上
+    return Path(__file__).resolve().parents[2]
+
+
+def _try_acquire_single_instance_lock(base_dir: Path):
+    """常駐プロセスは1つのみという要件を守るため、二重起動をロックファイルで防ぐ。
+    取得できればファイルハンドルを返す(プロセス終了時に自動的に解放される)。
+    既に他プロセスが起動中ならNoneを返す。"""
+    lock_path = base_dir / ".instance.lock"
+    f = open(lock_path, "w")
+    try:
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
+def _show_already_running_message() -> None:
+    tmp_root = tk.Tk()
+    tmp_root.withdraw()
+    messagebox.showerror(
+        "起動できません",
+        "キッザニア館内音響自動化システムは既に起動しています。\n"
+        "二重に起動すると音声が二重に再生されるおそれがあるため、今回の起動は中止します。",
+    )
+    tmp_root.destroy()
+
+
+def _prevent_sleep(enabled: bool) -> None:
+    if not enabled or sys.platform != "win32":
+        return
+    ctypes.windll.kernel32.SetThreadExecutionState(
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    )
+
+
+def _restore_sleep_settings() -> None:
+    if sys.platform != "win32":
+        return
+    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+
+def main() -> None:
+    base_dir = _base_dir()
+
+    lock_file = _try_acquire_single_instance_lock(base_dir)
+    if lock_file is None:
+        _show_already_running_message()
+        return
+
+    config = AppConfig(base_dir=base_dir)
+    logger = setup_logging(config.log_dir, config.log_level)
+
+    logger.info("=== キッザニア館内音響自動化システム 起動 ===")
+    _prevent_sleep(config.prevent_sleep)
+
+    try:
+        import vlc
+    except Exception:
+        logger.exception(
+            "python-vlc の読み込みに失敗しました。VLCメディアプレーヤー本体が"
+            "インストールされているか確認してください。"
+        )
+        raise
+
+    vlc_instance = vlc.Instance()
+
+    scheduler = JobScheduler(config, vlc_instance, logger)
+
+    root = tk.Tk()
+
+    def _reload_schedule() -> None:
+        scheduler.reload()
+
+    MainWindow(root, config, logger, vlc_instance, on_reload_schedule=_reload_schedule)
+
+    scheduler.start()
+
+    try:
+        root.mainloop()
+    finally:
+        scheduler.shutdown()
+        _restore_sleep_settings()
+        logger.info("=== システム終了 ===")
+        try:
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        lock_file.close()
+
+
+if __name__ == "__main__":
+    main()

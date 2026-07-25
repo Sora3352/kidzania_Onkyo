@@ -1,0 +1,9 @@
+{
+  "_comment": "アプリ全体の設定。media_root配下に実際の音源・動画ファイルを配置してください。",
+  "media_root": "media",
+  "log_dir": "logs",
+  "log_level": "INFO",
+  "prevent_sleep": true,
+  "schedule_file": "config/schedule.json",
+  "stage_shows_file": "config/stage_shows.json"
+}

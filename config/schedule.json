@@ -1,0 +1,41 @@
+{
+  "_comment": "自動再生スケジュール。common_jobsは営業モードに関わらず常時有効(街時計など)。modesは「通し営業」「2部制営業」ごとの個別スケジュール。manual_jobsはGUIの「手動追加」タブから追加したジョブ(モードに関わらず常時有効)。active_modeは現在GUIで選択されている営業モード。cronはAPScheduler CronTriggerの引数(hour/minuteを指定、hourを省略すると毎時実行)。fileはmedia_rootからの相対パス(絶対パスも可)。volumeは0-100。",
+  "active_mode": "通し営業",
+  "common_jobs": [
+    {
+      "id": "street_clock_hourly",
+      "name": "街時計ダンス音楽(毎時16分)",
+      "file": "street_clock/kidzania_Wrap up Party_loop_b2.mp3",
+      "volume": 65,
+      "cron": {
+        "minute": 27
+      },
+      "enabled": false
+    },
+    {
+      "id": "manual_a00eba19",
+      "name": "Welcomフル",
+      "file": "street_clock/KZ_Welcom.mp3",
+      "volume": 80,
+      "cron": {
+        "minute": 17
+      },
+      "enabled": true
+    },
+    {
+      "id": "manual_cd1614a7",
+      "name": "テスト",
+      "file": "bgm/ScreenRecording_12-05-2025 00-18-18_1.mp3",
+      "volume": 80,
+      "cron": {
+        "minute": 37
+      },
+      "enabled": true
+    }
+  ],
+  "modes": {
+    "通し営業": [],
+    "2部制営業": []
+  },
+  "manual_jobs": []
+}
