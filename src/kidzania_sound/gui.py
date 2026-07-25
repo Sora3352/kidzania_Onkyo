@@ -116,7 +116,7 @@ class MainWindow:
         self._mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
 
         self._clock_var = tk.StringVar()
-        ttk.Label(mode_frame, textvariable=self._clock_var, font=("", 11)).pack(side="right")
+        ttk.Label(mode_frame, textvariable=self._clock_var, font=("", 20, "bold")).pack(side="right")
 
         stage_mode_frame = ttk.Frame(top)
         stage_mode_frame.pack(fill="x", pady=(0, 8))
