@@ -24,6 +24,21 @@ def _base_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _make_process_dpi_aware() -> None:
+    """モニターごとにDPI(拡大率)が異なる環境で、拡張ディスプレイの座標が
+    ずれて計算されてしまうのを防ぐ。ウィンドウを1つも作る前に呼ぶ必要がある。"""
+    if sys.platform != "win32":
+        return
+    try:
+        # PROCESS_PER_MONITOR_DPI_AWARE
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def _try_acquire_single_instance_lock(base_dir: Path):
     """常駐プロセスは1つのみという要件を守るため、二重起動をロックファイルで防ぐ。
     取得できればファイルハンドルを返す(プロセス終了時に自動的に解放される)。
@@ -64,6 +79,8 @@ def _restore_sleep_settings() -> None:
 
 
 def main() -> None:
+    _make_process_dpi_aware()
+
     base_dir = _base_dir()
 
     lock_file = _try_acquire_single_instance_lock(base_dir)
