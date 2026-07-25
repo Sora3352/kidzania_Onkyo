@@ -34,6 +34,36 @@ def _move_window_to_monitor(hwnd: int, x: int, y: int, width: int, height: int) 
     _user32.SetWindowPos(ctypes.c_void_p(hwnd), _HWND_TOPMOST, x, y, width, height, _SWP_SHOWWINDOW)
 
 
+def _log_placement_diagnostics(logger: logging.Logger, hwnd: int) -> None:
+    """配置がおかしい場合の原因切り分け用に、実際のウィンドウ位置・プロセスの
+    DPI Awareness・モニターごとのDPIをログに残す。"""
+    try:
+        rect = wintypes.RECT()
+        ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect))
+        logger.info(
+            "[診断] GetWindowRectでの実際の位置: left=%d top=%d right=%d bottom=%d",
+            rect.left, rect.top, rect.right, rect.bottom,
+        )
+    except Exception:
+        logger.exception("[診断] GetWindowRectの取得に失敗しました")
+
+    try:
+        awareness = ctypes.c_int()
+        ctypes.windll.shcore.GetProcessDpiAwareness(0, ctypes.byref(awareness))
+        logger.info("[診断] プロセスのDPI Awareness: %d (0=Unaware, 1=System, 2=PerMonitor)", awareness.value)
+    except Exception:
+        logger.exception("[診断] DPI Awarenessの取得に失敗しました")
+
+    try:
+        monitor_handle = ctypes.windll.user32.MonitorFromWindow(wintypes.HWND(hwnd), 2)  # MONITOR_DEFAULTTONEAREST
+        dpi_x = ctypes.c_uint()
+        dpi_y = ctypes.c_uint()
+        ctypes.windll.shcore.GetDpiForMonitor(monitor_handle, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
+        logger.info("[診断] ウィンドウが実際にある位置のモニターDPI: %d x %d", dpi_x.value, dpi_y.value)
+    except Exception:
+        logger.exception("[診断] モニターDPIの取得に失敗しました")
+
+
 def clamp_volume(volume: int) -> int:
     return max(0, min(100, volume))
 
@@ -86,7 +116,12 @@ def _select_extended_monitor(logger: logging.Logger):
     """ステージショーを映す拡張ディスプレイ(プライマリではないモニター)を選ぶ。
     見つからない場合(1台構成、未接続等)はNoneを返す。呼び出し側は
     見つかるまでバックグラウンドで待機し、メインディスプレイには何も表示しない。"""
-    for m in _enum_monitors(logger):
+    monitors = _enum_monitors(logger)
+    logger.info(
+        "[診断] 検出したモニター一覧: %s",
+        [f"{m.width}x{m.height}+{m.x}+{m.y}(primary={m.is_primary})" for m in monitors],
+    )
+    for m in monitors:
         if not m.is_primary:
             return m
     return None
@@ -322,11 +357,13 @@ class FullscreenVideoPlayer:
         # する。-topmost等の属性設定より後に行わないとTk側の内部状態で位置が
         # 上書きされてしまうため、最後に実行する。
         window.update_idletasks()
-        _move_window_to_monitor(window.winfo_id(), monitor.x, monitor.y, monitor.width, monitor.height)
+        hwnd = window.winfo_id()
+        _move_window_to_monitor(hwnd, monitor.x, monitor.y, monitor.width, monitor.height)
         self._logger.info(
             "ステージショー用ウィンドウを配置しました (%dx%d+%d+%d, primary=%s)",
             monitor.width, monitor.height, monitor.x, monitor.y, monitor.is_primary,
         )
+        _log_placement_diagnostics(self._logger, hwnd)
 
         self._window = window
 
