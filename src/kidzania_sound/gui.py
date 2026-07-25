@@ -8,10 +8,12 @@
 """
 from __future__ import annotations
 
+import ctypes
 import logging
 import queue
 import tkinter as tk
 import uuid
+from ctypes import wintypes
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
@@ -23,6 +25,28 @@ MEDIA_FILETYPES = [
     ("メディアファイル", "*.mp3 *.wav *.mp4 *.mov *.m4a *.wmv *.avi"),
     ("すべてのファイル", "*.*"),
 ]
+
+_SPI_GETWORKAREA = 0x0030
+
+
+def _maximize_window(window: tk.Wm) -> None:
+    """Tkinterのstate('zoomed')はPer-Monitor DPI Aware環境でウィンドウサイズを
+    誤って計算し、画面からはみ出すことがある(例: ボタンが画面外に出て押せない)。
+    そのためWin32 APIから実際の作業領域(タスクバーを除いた表示可能領域)を
+    取得し、その85%程度・中央配置のサイズで直接ウィンドウを配置する
+    (画面いっぱいにすると逆に端のボタンが押しづらくなるため、余白を残す)。"""
+    try:
+        rect = wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(_SPI_GETWORKAREA, 0, ctypes.byref(rect), 0)
+        work_width = rect.right - rect.left
+        work_height = rect.bottom - rect.top
+        width = int(work_width * 0.85)
+        height = int(work_height * 0.85)
+        x = rect.left + (work_width - width) // 2
+        y = rect.top + (work_height - height) // 2
+        window.geometry(f"{width}x{height}+{x}+{y}")
+    except Exception:
+        window.geometry("1000x700")
 
 
 class QueueLogHandler(logging.Handler):
@@ -55,7 +79,7 @@ class MainWindow:
         self._stage_mode_var = tk.BooleanVar(value=False)
 
         root.title("キッザニア館内音響システム")
-        root.geometry("700x520")
+        _maximize_window(root)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_widgets()
@@ -550,7 +574,7 @@ class ScheduleManagerWindow(tk.Toplevel):
     def __init__(self, parent: tk.Tk, config: AppConfig, on_saved: Callable[[], None]):
         super().__init__(parent)
         self.title("スケジュール管理")
-        self.geometry("760x560")
+        _maximize_window(self)
         self.transient(parent)
         self.grab_set()
 
