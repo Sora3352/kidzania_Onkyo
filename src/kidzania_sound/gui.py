@@ -32,6 +32,9 @@ MEDIA_FILETYPES = [
 
 _SPI_GETWORKAREA = 0x0030
 
+_HEADER_COLOR = "#c4044b"
+_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+
 
 def _maximize_window(window: tk.Wm) -> None:
     """Tkinterのstate('zoomed')はPer-Monitor DPI Aware環境でウィンドウサイズを
@@ -98,6 +101,8 @@ class MainWindow:
     # 画面構築
     # ------------------------------------------------------------------
     def _build_widgets(self) -> None:
+        self._build_header()
+
         top = ttk.Frame(self._root, padding=10)
         top.pack(fill="x")
 
@@ -167,6 +172,20 @@ class MainWindow:
         scrollbar = ttk.Scrollbar(log_frame, command=self._log_text.yview)
         scrollbar.pack(fill="y", side="right")
         self._log_text.configure(yscrollcommand=scrollbar.set)
+
+    def _build_header(self) -> None:
+        header = tk.Frame(self._root, bg=_HEADER_COLOR, height=64)
+        header.pack(fill="x", side="top")
+        header.pack_propagate(False)
+
+        logo_path = _ASSETS_DIR / "kidzania_logo.png"
+        if logo_path.exists():
+            # PhotoImageはローカル変数にすると参照が切れて画像が消えるため、
+            # インスタンス属性として保持しておく。
+            self._logo_image = tk.PhotoImage(file=str(logo_path)).subsample(2, 2)
+            tk.Label(header, image=self._logo_image, bg=_HEADER_COLOR).pack(side="left", padx=24, pady=6)
+        else:
+            self._logger.warning("ロゴ画像が見つかりません: %s", logo_path)
 
     def _render_stage_buttons(self, frame: ttk.Frame) -> None:
         for widget in frame.winfo_children():
