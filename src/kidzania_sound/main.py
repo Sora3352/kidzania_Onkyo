@@ -112,7 +112,7 @@ def main() -> None:
     def _reload_schedule() -> None:
         scheduler.reload()
 
-    MainWindow(root, config, logger, vlc_instance, on_reload_schedule=_reload_schedule)
+    MainWindow(root, config, logger, vlc_instance, scheduler, on_reload_schedule=_reload_schedule)
 
     scheduler.start()
 

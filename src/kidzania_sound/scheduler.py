@@ -17,6 +17,10 @@ class JobScheduler:
         self._vlc_instance = vlc_instance
         self._logger = logger
         self._scheduler = BackgroundScheduler()
+        # job_id -> (表示名, 再生中のAudioCue)。GUIの「現在再生中」パネルから参照・停止する。
+        self._active_cues: dict[str, tuple[str, AudioCue]] = {}
+        # 次回だけスキップしたいジョブのid集合(GUIの「次回スキップ」から追加)。
+        self._skip_once: set[str] = set()
 
     def start(self) -> None:
         self._load_jobs()
@@ -29,6 +33,7 @@ class JobScheduler:
 
     def reload(self) -> None:
         self._scheduler.remove_all_jobs()
+        self._skip_once.clear()
         self._load_jobs()
         self._logger.info("スケジュールを再読み込みしました")
 
@@ -55,8 +60,46 @@ class JobScheduler:
 
     def _make_runner(self, job: ScheduledJob) -> Callable[[], None]:
         def _run() -> None:
+            if job.id in self._skip_once:
+                self._skip_once.discard(job.id)
+                self._logger.info("次回をスキップしました: %s", job.name)
+                return
+
             cue = AudioCue(self._vlc_instance, self._logger)
             path = self._config.resolve_media(job.file)
-            cue.play(path, job.volume, job.name)
+
+            def _on_finished() -> None:
+                self._active_cues.pop(job.id, None)
+
+            self._active_cues[job.id] = (job.name, cue)
+            cue.play(path, job.volume, job.name, on_finished=_on_finished)
 
         return _run
+
+    # ------------------------------------------------------------------
+    # GUIの「現在再生中/次の予定」パネル向け
+    # ------------------------------------------------------------------
+    def get_active_cues(self) -> list[tuple[str, str]]:
+        """現在再生中のジョブ一覧を(job_id, 表示名)で返す。"""
+        return [(job_id, name) for job_id, (name, _cue) in self._active_cues.items()]
+
+    def stop_active_cue(self, job_id: str) -> None:
+        entry = self._active_cues.pop(job_id, None)
+        if entry is not None:
+            name, cue = entry
+            cue.stop()
+            self._logger.info("再生を手動停止しました: %s", name)
+
+    def get_upcoming(self, limit: int = 8) -> list[tuple]:
+        """直近に実行予定のジョブを(実行時刻, job_id, 表示名)のリストで返す
+        (実行時刻が近い順)。"""
+        entries = [
+            (j.next_run_time, j.id, j.name)
+            for j in self._scheduler.get_jobs()
+            if j.next_run_time is not None
+        ]
+        entries.sort(key=lambda e: e[0])
+        return entries[:limit]
+
+    def skip_next(self, job_id: str) -> None:
+        self._skip_once.add(job_id)

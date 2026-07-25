@@ -109,16 +109,22 @@ def _select_extended_monitor(logger: logging.Logger):
 
 
 class AudioCue:
-    """スケジュールジョブ用の一回限りの音声再生。再生終了後は自動的に破棄される。"""
+    """スケジュールジョブ用の一回限りの音声再生。再生終了後は自動的に破棄される。
+    手動で途中停止することもできる(stop())。"""
 
     def __init__(self, instance: vlc.Instance, logger: logging.Logger):
         self._instance = instance
         self._logger = logger
         self._player: Optional[vlc.MediaPlayer] = None
+        self._on_finished: Optional[Callable[[], None]] = None
 
-    def play(self, path: Path, volume: int, label: str) -> None:
+    def play(self, path: Path, volume: int, label: str, on_finished: Optional[Callable[[], None]] = None) -> None:
+        self._on_finished = on_finished
+
         if not path.exists():
             self._logger.error("音源ファイルが見つかりません(%s): %s", label, path)
+            if on_finished is not None:
+                on_finished()
             return
 
         try:
@@ -136,6 +142,28 @@ class AudioCue:
             self._logger.info("再生開始(%s): %s (volume=%d)", label, path.name, volume)
         except Exception:
             self._logger.exception("再生に失敗しました(%s): %s", label, path)
+            if on_finished is not None:
+                on_finished()
+
+    def stop(self) -> None:
+        """手動での途中停止(GUIの「現在再生中」パネルから呼ばれる)。"""
+        player = self._player
+        if player is None:
+            return
+        self._player = None
+        # 自然終了時のクリーンアップ(別スレッドでstop()/release()する経路)と
+        # 二重に解放してしまわないよう、先にイベントハンドラを外しておく。
+        try:
+            events = player.event_manager()
+            events.event_detach(vlc.EventType.MediaPlayerEndReached)
+            events.event_detach(vlc.EventType.MediaPlayerEncounteredError)
+        except Exception:
+            pass
+        try:
+            player.stop()
+            player.release()
+        except Exception:
+            self._logger.exception("再生の手動停止に失敗しました")
 
     def _make_cleanup(self, player: vlc.MediaPlayer, label: str) -> Callable:
         def _cleanup(_event) -> None:
@@ -159,6 +187,10 @@ class AudioCue:
             player.release()
         except Exception:
             self._logger.exception("再生リソースの解放に失敗しました(%s)", label)
+        finally:
+            self._player = None
+            if self._on_finished is not None:
+                self._on_finished()
 
 
 class FullscreenVideoPlayer:

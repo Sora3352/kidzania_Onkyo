@@ -14,12 +14,16 @@ import queue
 import tkinter as tk
 import uuid
 from ctypes import wintypes
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
 from .config import AppConfig, ScheduledJob, StageShow
 from .player import FullscreenVideoPlayer
+from .scheduler import JobScheduler
+
+_WEEKDAY_JA = "月火水木金土日"
 
 MEDIA_FILETYPES = [
     ("メディアファイル", "*.mp3 *.wav *.mp4 *.mov *.m4a *.wmv *.avi"),
@@ -67,11 +71,13 @@ class MainWindow:
         config: AppConfig,
         logger: logging.Logger,
         vlc_instance,
+        scheduler: JobScheduler,
         on_reload_schedule: Callable[[], None],
     ):
         self._root = root
         self._config = config
         self._logger = logger
+        self._scheduler = scheduler
         self._on_reload_schedule = on_reload_schedule
         self._video_player = FullscreenVideoPlayer(root, vlc_instance, logger)
         self._log_queue: "queue.Queue[str]" = queue.Queue()
@@ -85,6 +91,8 @@ class MainWindow:
         self._build_widgets()
         self._attach_log_handler()
         self._poll_log_queue()
+        self._update_clock()
+        self._refresh_schedule_overview()
 
     # ------------------------------------------------------------------
     # 画面構築
@@ -106,6 +114,9 @@ class MainWindow:
         )
         self._mode_combo.pack(side="left", padx=5)
         self._mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
+
+        self._clock_var = tk.StringVar()
+        ttk.Label(mode_frame, textvariable=self._clock_var, font=("", 11)).pack(side="right")
 
         stage_mode_frame = ttk.Frame(top)
         stage_mode_frame.pack(fill="x", pady=(0, 8))
@@ -129,7 +140,23 @@ class MainWindow:
         self._next_button.pack(side="left")
         self._next_button.state(["disabled"])
 
-        ttk.Button(top, text="スケジュール管理...", command=self._open_schedule_manager).pack(anchor="e", pady=(5, 0))
+        overview_frame = ttk.Frame(top)
+        overview_frame.pack(fill="x", pady=(5, 0))
+
+        overview_left = ttk.Frame(overview_frame)
+        overview_left.pack(side="left", fill="both", expand=True)
+
+        ttk.Label(overview_left, text="現在再生中", font=("", 9, "bold")).pack(anchor="w")
+        self._active_frame = ttk.Frame(overview_left)
+        self._active_frame.pack(fill="x")
+
+        ttk.Label(overview_left, text="次の予定", font=("", 9, "bold")).pack(anchor="w", pady=(4, 0))
+        self._upcoming_frame = ttk.Frame(overview_left)
+        self._upcoming_frame.pack(fill="x")
+
+        ttk.Button(overview_frame, text="スケジュール管理...", command=self._open_schedule_manager).pack(
+            side="right", anchor="n"
+        )
 
         log_frame = ttk.Frame(self._root, padding=(10, 0, 10, 10))
         log_frame.pack(fill="both", expand=True)
@@ -165,6 +192,65 @@ class MainWindow:
     def _set_stage_buttons_enabled(self, enabled: bool) -> None:
         for btn in self._stage_buttons.values():
             btn.state(["!disabled"] if enabled else ["disabled"])
+
+    # ------------------------------------------------------------------
+    # 現在日時の表示
+    # ------------------------------------------------------------------
+    def _update_clock(self) -> None:
+        now = datetime.now()
+        weekday = _WEEKDAY_JA[now.weekday()]
+        self._clock_var.set(now.strftime(f"%Y-%m-%d({weekday}) %H:%M:%S"))
+        self._root.after(1000, self._update_clock)
+
+    # ------------------------------------------------------------------
+    # 現在再生中/次の予定パネル(スケジュール自動再生ジョブ向け)
+    # ------------------------------------------------------------------
+    def _refresh_schedule_overview(self) -> None:
+        self._render_active_cues()
+        self._render_upcoming()
+        self._root.after(1000, self._refresh_schedule_overview)
+
+    def _render_active_cues(self) -> None:
+        for widget in self._active_frame.winfo_children():
+            widget.destroy()
+
+        active = self._scheduler.get_active_cues()
+        if not active:
+            ttk.Label(self._active_frame, text="(再生中の項目はありません)", foreground="#888888").pack(anchor="w")
+            return
+
+        for job_id, name in active:
+            row = ttk.Frame(self._active_frame)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=name, width=32, anchor="w").pack(side="left")
+            ttk.Button(
+                row, text="■ 停止", width=8, command=lambda jid=job_id: self._on_stop_active_cue(jid)
+            ).pack(side="left", padx=4)
+
+    def _on_stop_active_cue(self, job_id: str) -> None:
+        self._scheduler.stop_active_cue(job_id)
+        self._render_active_cues()
+
+    def _render_upcoming(self) -> None:
+        for widget in self._upcoming_frame.winfo_children():
+            widget.destroy()
+
+        upcoming = self._scheduler.get_upcoming(limit=5)
+        if not upcoming:
+            ttk.Label(self._upcoming_frame, text="(予定はありません)", foreground="#888888").pack(anchor="w")
+            return
+
+        for next_run_time, job_id, name in upcoming:
+            row = ttk.Frame(self._upcoming_frame)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=f"{next_run_time:%H:%M:%S}  {name}", width=32, anchor="w").pack(side="left")
+            ttk.Button(
+                row, text="次回スキップ", width=10, command=lambda jid=job_id: self._on_skip_next(jid)
+            ).pack(side="left", padx=4)
+
+    def _on_skip_next(self, job_id: str) -> None:
+        self._scheduler.skip_next(job_id)
+        self._render_upcoming()
 
     # ------------------------------------------------------------------
     # 営業モード切り替え
