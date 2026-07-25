@@ -18,7 +18,7 @@
       "file": "street_clock/KZ_Welcom.mp3",
       "volume": 80,
       "cron": {
-        "minute": 54
+        "minute": 16
       },
       "enabled": true
     },
