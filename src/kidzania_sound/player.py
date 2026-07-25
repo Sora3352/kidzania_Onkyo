@@ -25,43 +25,24 @@ _user32.SetWindowPos.restype = ctypes.c_bool
 
 _HWND_TOPMOST = ctypes.c_void_p(-1)
 _SWP_SHOWWINDOW = 0x0040
+_GA_ROOT = 2
+
+
+def _top_level_hwnd(hwnd: int) -> int:
+    """tkinterのToplevel.winfo_id()はWS_CHILDスタイルの描画用子ウィンドウの
+    HWNDを返す(overrideredirect時など)。SetWindowPosの座標は子ウィンドウでは
+    親からの相対位置として扱われてしまうため、実際に画面上を動かせる
+    トップレベル祖先ウィンドウをGetAncestorで取得してから使う必要がある。"""
+    root_hwnd = ctypes.windll.user32.GetAncestor(wintypes.HWND(hwnd), _GA_ROOT)
+    return root_hwnd or hwnd
 
 
 def _move_window_to_monitor(hwnd: int, x: int, y: int, width: int, height: int) -> None:
     """TkinterのgeometryX/Y文字列は先頭の符号を「画面端からの位置指定」フラグ
     として扱うため、プライマリより左/上にある拡張ディスプレイ(負の座標)を
     正しく指定できない。そのためWin32 APIで直接ウィンドウ位置を指定する。"""
-    _user32.SetWindowPos(ctypes.c_void_p(hwnd), _HWND_TOPMOST, x, y, width, height, _SWP_SHOWWINDOW)
-
-
-def _log_placement_diagnostics(logger: logging.Logger, hwnd: int) -> None:
-    """配置がおかしい場合の原因切り分け用に、実際のウィンドウ位置・プロセスの
-    DPI Awareness・モニターごとのDPIをログに残す。"""
-    try:
-        rect = wintypes.RECT()
-        ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect))
-        logger.info(
-            "[診断] GetWindowRectでの実際の位置: left=%d top=%d right=%d bottom=%d",
-            rect.left, rect.top, rect.right, rect.bottom,
-        )
-    except Exception:
-        logger.exception("[診断] GetWindowRectの取得に失敗しました")
-
-    try:
-        awareness = ctypes.c_int()
-        ctypes.windll.shcore.GetProcessDpiAwareness(0, ctypes.byref(awareness))
-        logger.info("[診断] プロセスのDPI Awareness: %d (0=Unaware, 1=System, 2=PerMonitor)", awareness.value)
-    except Exception:
-        logger.exception("[診断] DPI Awarenessの取得に失敗しました")
-
-    try:
-        monitor_handle = ctypes.windll.user32.MonitorFromWindow(wintypes.HWND(hwnd), 2)  # MONITOR_DEFAULTTONEAREST
-        dpi_x = ctypes.c_uint()
-        dpi_y = ctypes.c_uint()
-        ctypes.windll.shcore.GetDpiForMonitor(monitor_handle, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
-        logger.info("[診断] ウィンドウが実際にある位置のモニターDPI: %d x %d", dpi_x.value, dpi_y.value)
-    except Exception:
-        logger.exception("[診断] モニターDPIの取得に失敗しました")
+    target_hwnd = _top_level_hwnd(hwnd)
+    _user32.SetWindowPos(ctypes.c_void_p(target_hwnd), _HWND_TOPMOST, x, y, width, height, _SWP_SHOWWINDOW)
 
 
 def clamp_volume(volume: int) -> int:
@@ -118,7 +99,7 @@ def _select_extended_monitor(logger: logging.Logger):
     見つかるまでバックグラウンドで待機し、メインディスプレイには何も表示しない。"""
     monitors = _enum_monitors(logger)
     logger.info(
-        "[診断] 検出したモニター一覧: %s",
+        "検出したモニター一覧: %s",
         [f"{m.width}x{m.height}+{m.x}+{m.y}(primary={m.is_primary})" for m in monitors],
     )
     for m in monitors:
@@ -351,19 +332,19 @@ class FullscreenVideoPlayer:
         hint = tk.Label(window, text="ESCキーで停止/待機画面を閉じます", fg="#555555", bg="black", font=("", 10))
         hint.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
 
-        # TkのgeometryX/Y文字列は先頭の符号を「画面端からの位置指定」フラグ
-        # として扱うため、プライマリより左/上にある拡張ディスプレイ(負の座標)
-        # を正しく指定できない。そのためWin32 APIで直接ウィンドウ位置を指定
-        # する。-topmost等の属性設定より後に行わないとTk側の内部状態で位置が
-        # 上書きされてしまうため、最後に実行する。
+        # TkのgeometryX/Y文字列は先頭の符号を「画面端からの位置指定」フラグとして
+        # 扱うため負の座標(プライマリより左/上の拡張ディスプレイ)を指定できず、
+        # またwinfo_id()はWS_CHILDの描画用子ウィンドウを返す(overrideredirect時)
+        # ため、そのままSetWindowPosしても親からの相対位置として扱われ画面に
+        # 反映されない。そのためWin32 APIで真のトップレベル祖先ウィンドウに対して
+        # 直接位置指定する。-topmost等の属性設定より後に行わないとTk側の内部
+        # 状態で位置が上書きされてしまうため、最後に実行する。
         window.update_idletasks()
-        hwnd = window.winfo_id()
-        _move_window_to_monitor(hwnd, monitor.x, monitor.y, monitor.width, monitor.height)
+        _move_window_to_monitor(window.winfo_id(), monitor.x, monitor.y, monitor.width, monitor.height)
         self._logger.info(
             "ステージショー用ウィンドウを配置しました (%dx%d+%d+%d, primary=%s)",
             monitor.width, monitor.height, monitor.x, monitor.y, monitor.is_primary,
         )
-        _log_placement_diagnostics(self._logger, hwnd)
 
         self._window = window
 
