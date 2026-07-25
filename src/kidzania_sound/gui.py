@@ -33,6 +33,7 @@ MEDIA_FILETYPES = [
 _SPI_GETWORKAREA = 0x0030
 
 _HEADER_COLOR = "#c4044b"
+_SUBHEADER_COLOR = "#F8981D"
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
 
@@ -102,26 +103,10 @@ class MainWindow:
     # ------------------------------------------------------------------
     def _build_widgets(self) -> None:
         self._build_header()
+        self._build_subheader()
 
         top = ttk.Frame(self._root, padding=10)
         top.pack(fill="x")
-
-        mode_frame = ttk.Frame(top)
-        mode_frame.pack(fill="x", pady=(0, 8))
-        ttk.Label(mode_frame, text="営業モード:", font=("", 10, "bold")).pack(side="left")
-        self._mode_var = tk.StringVar(value=self._config.get_active_mode())
-        self._mode_combo = ttk.Combobox(
-            mode_frame,
-            textvariable=self._mode_var,
-            values=self._config.get_mode_names(),
-            state="readonly",
-            width=16,
-        )
-        self._mode_combo.pack(side="left", padx=5)
-        self._mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
-
-        self._clock_var = tk.StringVar()
-        ttk.Label(mode_frame, textvariable=self._clock_var, font=("", 20, "bold")).pack(side="right")
 
         stage_mode_frame = ttk.Frame(top)
         stage_mode_frame.pack(fill="x", pady=(0, 8))
@@ -186,6 +171,30 @@ class MainWindow:
             tk.Label(header, image=self._logo_image, bg=_HEADER_COLOR).pack(side="left", padx=24, pady=6)
         else:
             self._logger.warning("ロゴ画像が見つかりません: %s", logo_path)
+
+    def _build_subheader(self) -> None:
+        subheader = tk.Frame(self._root, bg=_SUBHEADER_COLOR)
+        subheader.pack(fill="x", side="top")
+
+        tk.Label(
+            subheader, text="営業モード:", font=("", 10, "bold"), bg=_SUBHEADER_COLOR, fg="white"
+        ).pack(side="left", padx=(16, 6), pady=10)
+
+        self._mode_var = tk.StringVar(value=self._config.get_active_mode())
+        self._mode_combo = ttk.Combobox(
+            subheader,
+            textvariable=self._mode_var,
+            values=self._config.get_mode_names(),
+            state="readonly",
+            width=16,
+        )
+        self._mode_combo.pack(side="left", pady=10)
+        self._mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
+
+        self._clock_var = tk.StringVar()
+        tk.Label(
+            subheader, textvariable=self._clock_var, font=("", 18, "bold"), bg=_SUBHEADER_COLOR, fg="white"
+        ).pack(side="right", padx=16)
 
     def _render_stage_buttons(self, frame: ttk.Frame) -> None:
         for widget in frame.winfo_children():
