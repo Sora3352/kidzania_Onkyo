@@ -12,6 +12,12 @@
       "label": "ファッションショー",
       "files": ["stage_shows/fashion_show.mp4"],
       "volume": 90
+    },
+    {
+      "id": "fanfan_birthday",
+      "label": "fanfanバースデー",
+      "files": [],
+      "volume": 90
     }
   ]
 }
