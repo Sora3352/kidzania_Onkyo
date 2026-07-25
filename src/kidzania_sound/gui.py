@@ -57,6 +57,29 @@ def _maximize_window(window: tk.Wm) -> None:
         window.geometry("1000x700")
 
 
+_BASE_FONT_SIZE = 13
+
+
+def _configure_styles(root: tk.Tk) -> None:
+    """全体的に文字が小さく見づらいという指摘への対応。ttkウィジェットの既定
+    フォントと、Text/Listboxなど素のtkウィジェットの既定フォントをまとめて
+    引き上げる。"""
+    base_font = ("", _BASE_FONT_SIZE)
+    bold_font = ("", _BASE_FONT_SIZE, "bold")
+
+    root.option_add("*Font", base_font)
+    root.option_add("*TCombobox*Listbox.font", base_font)
+
+    style = ttk.Style(root)
+    for widget_class in (
+        "TLabel", "TButton", "TCheckbutton", "TRadiobutton",
+        "TEntry", "TCombobox", "TSpinbox", "TMenubutton",
+    ):
+        style.configure(widget_class, font=base_font)
+    style.configure("TNotebook.Tab", font=bold_font, padding=(14, 8))
+    style.configure("TButton", padding=(8, 5))
+
+
 class QueueLogHandler(logging.Handler):
     """バックグラウンドスレッド(スケジューラー等)からのログをTkinterに安全に流すためのハンドラ。"""
 
@@ -92,6 +115,7 @@ class MainWindow:
         _maximize_window(root)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        _configure_styles(root)
         self._build_widgets()
         self._attach_log_handler()
         self._poll_log_queue()
@@ -117,7 +141,7 @@ class MainWindow:
             command=self._on_stage_mode_toggle,
         ).pack(side="left")
 
-        ttk.Label(top, text="ステージショー", font=("", 12, "bold")).pack(anchor="w")
+        ttk.Label(top, text="ステージショー", font=("", 17, "bold")).pack(anchor="w")
 
         self._stage_button_frame = ttk.Frame(top)
         self._stage_button_frame.pack(fill="x", pady=5)
@@ -136,11 +160,11 @@ class MainWindow:
         overview_left = ttk.Frame(overview_frame)
         overview_left.pack(side="left", fill="both", expand=True)
 
-        ttk.Label(overview_left, text="現在再生中", font=("", 9, "bold")).pack(anchor="w")
+        ttk.Label(overview_left, text="現在再生中", font=("", 14, "bold")).pack(anchor="w")
         self._active_frame = ttk.Frame(overview_left)
         self._active_frame.pack(fill="x")
 
-        ttk.Label(overview_left, text="次の予定", font=("", 9, "bold")).pack(anchor="w", pady=(4, 0))
+        ttk.Label(overview_left, text="次の予定", font=("", 14, "bold")).pack(anchor="w", pady=(4, 0))
         self._upcoming_frame = ttk.Frame(overview_left)
         self._upcoming_frame.pack(fill="x")
 
@@ -152,7 +176,7 @@ class MainWindow:
         log_frame.pack(fill="both", expand=True)
         ttk.Label(log_frame, text="動作ログ").pack(anchor="w")
 
-        self._log_text = tk.Text(log_frame, height=18, state="disabled", wrap="word")
+        self._log_text = tk.Text(log_frame, height=18, state="disabled", wrap="word", font=("", 12))
         self._log_text.pack(fill="both", expand=True, side="left")
         scrollbar = ttk.Scrollbar(log_frame, command=self._log_text.yview)
         scrollbar.pack(fill="y", side="right")
@@ -177,7 +201,7 @@ class MainWindow:
         subheader.pack(fill="x", side="top")
 
         tk.Label(
-            subheader, text="営業モード:", font=("", 10, "bold"), bg=_SUBHEADER_COLOR, fg="white"
+            subheader, text="営業モード:", font=("", 14, "bold"), bg=_SUBHEADER_COLOR, fg="white"
         ).pack(side="left", padx=(16, 6), pady=10)
 
         self._mode_var = tk.StringVar(value=self._config.get_active_mode())
@@ -193,7 +217,7 @@ class MainWindow:
 
         self._clock_var = tk.StringVar()
         tk.Label(
-            subheader, textvariable=self._clock_var, font=("", 18, "bold"), bg=_SUBHEADER_COLOR, fg="white"
+            subheader, textvariable=self._clock_var, font=("", 22, "bold"), bg=_SUBHEADER_COLOR, fg="white"
         ).pack(side="right", padx=16)
 
     def _render_stage_buttons(self, frame: ttk.Frame) -> None:
@@ -608,7 +632,7 @@ class StageShowRow:
 
         body = ttk.Frame(self.frame)
         body.pack(fill="x", pady=(4, 0))
-        self._listbox = tk.Listbox(body, height=3, width=45)
+        self._listbox = tk.Listbox(body, height=3, width=45, font=("", 12))
         self._listbox.pack(side="left", fill="x", expand=True)
         btns = ttk.Frame(body)
         btns.pack(side="left", padx=4)
