@@ -1,9 +1,20 @@
 {
-  "_comment": "アプリ全体の設定。media_root配下に実際の音源・動画ファイルを配置してください。",
+  "_comment": "アプリ全体の設定。media_root配下に実際の音源・動画ファイルを配置してください。device_nameとlinkはGUIの「システム設定」画面からも編集できる。device_nameはこの端末の名前(ウィンドウタイトルやリンク先の通知に使われる、未設定なら空のままでよい)。linkは2台のSurfaceを連携させる機能の設定(未使用ならenabled:falseのままでよく、単一PC運用に一切影響しない)。",
   "media_root": "media",
   "log_dir": "logs",
   "log_level": "INFO",
   "prevent_sleep": true,
   "schedule_file": "config/schedule.json",
-  "stage_shows_file": "config/stage_shows.json"
+  "stage_shows_file": "config/stage_shows.json",
+  "device_name": "",
+  "link": {
+    "_comment": "enabled:trueにすると2台のSurfaceを連携できる(施設内の閉域LAN・端末2台限定を前提とし、認証は行わない)。peer_hostには相手端末のIPアドレスを指定する。duck_volume_percentは相手が再生を開始した間、自機の再生中音量を元の音量の何%まで下げるか(20なら元音量の20%まで下げる)。poll_interval_secondsは接続状態の監視(1分おきを既定)と設定同期の取りこぼしに備えたフォールバック確認を兼ねる間隔(秒)。enabled/listen_port以外はGUIの「システム設定」から変更すると再起動なしで反映される。",
+    "enabled": false,
+    "peer_host": "",
+    "peer_port": 8765,
+    "listen_port": 8765,
+    "duck_volume_percent": 20,
+    "poll_interval_seconds": 60,
+    "http_timeout_seconds": 3
+  }
 }

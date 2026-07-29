@@ -10,6 +10,7 @@ from tkinter import messagebox
 
 from .config import AppConfig
 from .gui import MainWindow
+from .link import LinkService
 from .logging_setup import setup_logging
 from .scheduler import JobScheduler
 
@@ -105,21 +106,38 @@ def main() -> None:
 
     vlc_instance = vlc.Instance()
 
-    scheduler = JobScheduler(config, vlc_instance, logger)
+    link_service = LinkService(config, logger)
+
+    scheduler = JobScheduler(
+        config,
+        vlc_instance,
+        logger,
+        on_playback_started=lambda label: link_service.notify_async(
+            "/event/playback-started", {"label": label}
+        ),
+        on_playback_ended=lambda label: link_service.notify_async(
+            "/event/playback-ended", {"label": label}
+        ),
+    )
 
     root = tk.Tk()
 
     def _reload_schedule() -> None:
         scheduler.reload()
 
-    MainWindow(root, config, logger, vlc_instance, scheduler, on_reload_schedule=_reload_schedule)
+    MainWindow(
+        root, config, logger, vlc_instance, scheduler, on_reload_schedule=_reload_schedule,
+        link_service=link_service,
+    )
 
     scheduler.start()
+    link_service.start()
 
     try:
         root.mainloop()
     finally:
         scheduler.shutdown()
+        link_service.shutdown()
         _restore_sleep_settings()
         logger.info("=== システム終了 ===")
         try:

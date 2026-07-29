@@ -117,6 +117,8 @@ class AudioCue:
         self._logger = logger
         self._player: Optional[vlc.MediaPlayer] = None
         self._on_finished: Optional[Callable[[], None]] = None
+        self._base_volume: int = 0
+        self._ducked: bool = False
 
     def play(self, path: Path, volume: int, label: str, on_finished: Optional[Callable[[], None]] = None) -> None:
         self._on_finished = on_finished
@@ -131,7 +133,9 @@ class AudioCue:
             media = self._instance.media_new(str(path))
             player = self._instance.media_player_new()
             player.set_media(media)
-            player.audio_set_volume(clamp_volume(volume))
+            self._base_volume = clamp_volume(volume)
+            self._ducked = False
+            player.audio_set_volume(self._base_volume)
 
             events = player.event_manager()
             events.event_attach(vlc.EventType.MediaPlayerEndReached, self._make_cleanup(player, label))
@@ -164,6 +168,27 @@ class AudioCue:
             player.release()
         except Exception:
             self._logger.exception("再生の手動停止に失敗しました")
+
+    def duck(self, percent: int) -> None:
+        """連携先端末が再生を開始した際、元の音量のpercent%まで一時的に下げる。
+        既にダッキング済みなら何もしない(多重に下げてしまうのを防ぐ)。"""
+        if self._player is None or self._ducked:
+            return
+        self._ducked = True
+        try:
+            self._player.audio_set_volume(clamp_volume(self._base_volume * clamp_volume(percent) // 100))
+        except Exception:
+            self._logger.exception("ダッキングに失敗しました")
+
+    def restore(self) -> None:
+        """duck()で下げた音量を元に戻す。"""
+        if self._player is None or not self._ducked:
+            return
+        self._ducked = False
+        try:
+            self._player.audio_set_volume(self._base_volume)
+        except Exception:
+            self._logger.exception("音量復帰に失敗しました")
 
     def _make_cleanup(self, player: vlc.MediaPlayer, label: str) -> Callable:
         def _cleanup(_event) -> None:
@@ -219,6 +244,7 @@ class FullscreenVideoPlayer:
         self._playlist_index: int = -1
         self._volume: int = 80
         self._label: str = ""
+        self._ducked: bool = False
 
     def is_playing(self) -> bool:
         """実際に動画を再生中かどうか(待機中の黒画面はTrueにしない)。"""
@@ -229,6 +255,26 @@ class FullscreenVideoPlayer:
 
     def has_multiple_clips(self) -> bool:
         return self._playlist_index >= 0 and len(self._playlist) > 1
+
+    def duck(self, percent: int) -> None:
+        """連携先端末が再生を開始した際、元の音量のpercent%まで一時的に下げる。"""
+        if self._player is None or self._ducked:
+            return
+        self._ducked = True
+        try:
+            self._player.audio_set_volume(clamp_volume(self._volume * clamp_volume(percent) // 100))
+        except Exception:
+            self._logger.exception("ダッキングに失敗しました")
+
+    def restore(self) -> None:
+        """duck()で下げた音量を元に戻す。"""
+        if self._player is None or not self._ducked:
+            return
+        self._ducked = False
+        try:
+            self._player.audio_set_volume(self._volume)
+        except Exception:
+            self._logger.exception("音量復帰に失敗しました")
 
     # ------------------------------------------------------------------
     # ステージショーモード(待機黒画面)
@@ -326,6 +372,7 @@ class FullscreenVideoPlayer:
             self._window.update_idletasks()
             player.set_hwnd(self._window.winfo_id())
 
+            self._ducked = False
             self._player = player
             player.play()
             self._logger.info(

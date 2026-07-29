@@ -1,5 +1,5 @@
 {
-  "_comment": "自動再生スケジュール。common_jobsは営業モードに関わらず常時有効(街時計など)。modesは「通し営業」「2部制営業」ごとの個別スケジュール。manual_jobsはGUIの「手動追加」タブから追加したジョブ(モードに関わらず常時有効)。active_modeは現在GUIで選択されている営業モード。cronはAPScheduler CronTriggerの引数(hour/minuteを指定、hourを省略すると毎時実行)。fileはmedia_rootからの相対パス(絶対パスも可)。volumeは0-100。",
+  "_comment": "自動再生スケジュール。common_jobsは営業モードに関わらず常時有効(街時計など)。modesは「通し営業」「2部制営業」ごとの個別スケジュール。manual_jobsはGUIの「手動追加」タブから追加したジョブ(モードに関わらず常時有効)。active_modeは現在GUIで選択されている営業モード。cronはAPScheduler CronTriggerの引数(hour/minuteを指定、hourを省略すると毎時実行。hourに'10-18'のような範囲を指定すると、その時間帯だけ毎時minute分に実行される)。fileはmedia_rootからの相対パス(絶対パスも可)。volumeは0-100。blackout_windowsは共通/モード別/手動追加を問わず全ジョブの再生を止める時間帯(start>endなら深夜またぎ扱い)。GUIの「スケジュール管理」画面から編集可能。",
   "active_mode": "通し営業",
   "common_jobs": [
     {
@@ -18,9 +18,9 @@
       "file": "street_clock/KZ_Welcom.mp3",
       "volume": 80,
       "cron": {
-        "minute": 16
+        "minute": 47
       },
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "manual_cd1614a7",
@@ -28,14 +28,15 @@
       "file": "bgm/ScreenRecording_12-05-2025 00-18-18_1.mp3",
       "volume": 80,
       "cron": {
-        "minute": 37
+        "minute": 34
       },
-      "enabled": true
+      "enabled": false
     }
   ],
   "modes": {
     "通し営業": [],
     "2部制営業": []
   },
-  "manual_jobs": []
+  "manual_jobs": [],
+  "blackout_windows": []
 }

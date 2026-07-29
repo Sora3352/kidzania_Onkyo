@@ -13,8 +13,7 @@
       "id": "fashion_show",
       "label": "ファッションショー",
       "files": [
-        "stage_shows/fashion_show.mp4",
-        "stage_shows/西野＆津田動画.mp4"
+        "stage_shows/fashion_show.mp4"
       ],
       "volume": 90
     },
