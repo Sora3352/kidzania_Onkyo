@@ -7,5 +7,12 @@ __pycache__/
 logs/
 .instance.lock
 
-# GitHubの1ファイル100MB上限を超える音源(圧縮版のmp3を使用)
+# GitHubの1ファイル100MB上限を超える音源・動画(実データ)
 media/street_clock/kidzania_Wrap up Party_loop_b2.wav
+media/FunFun.mov
+media/フェアエル.mov
+media/stage_shows/ラップアップ.mp4
+media/ファッションショー/1オープニング.mov
+media/ファッションショー/2おとぎ.mov
+media/ファッションショー/3和モダン.mov
+media/ファッションショー/4パーティー.mov

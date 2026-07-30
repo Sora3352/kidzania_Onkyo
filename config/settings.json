@@ -6,15 +6,21 @@
   "prevent_sleep": true,
   "schedule_file": "config/schedule.json",
   "stage_shows_file": "config/stage_shows.json",
-  "device_name": "",
+  "device_name": "ノートPC",
   "link": {
     "_comment": "enabled:trueにすると2台のSurfaceを連携できる(施設内の閉域LAN・端末2台限定を前提とし、認証は行わない)。peer_hostには相手端末のIPアドレスを指定する。duck_volume_percentは相手が再生を開始した間、自機の再生中音量を元の音量の何%まで下げるか(20なら元音量の20%まで下げる)。poll_interval_secondsは接続状態の監視(1分おきを既定)と設定同期の取りこぼしに備えたフォールバック確認を兼ねる間隔(秒)。enabled/listen_port以外はGUIの「システム設定」から変更すると再起動なしで反映される。",
-    "enabled": false,
-    "peer_host": "",
+    "enabled": true,
+    "peer_host": "192.168.0.23",
     "peer_port": 8765,
     "listen_port": 8765,
-    "duck_volume_percent": 20,
-    "poll_interval_seconds": 60,
+    "duck_volume_percent": 0,
+    "poll_interval_seconds": 10,
     "http_timeout_seconds": 3
+  },
+  "lighting": {
+    "_comment": "照明卓(Zero 88 FLX S24)へのOSC送信設定。実機確認済みの固定仕様(host/portは変更不可)。enabled:falseだとOSC送信を一切行わない(照明卓未接続の開発機等でも安全)。音響PC側はhostと同じ192.168.1.x/24セグメントに固定IP(192.168.1.10と重複しない番号)で接続する必要がある(ゲートウェイなしのため)。",
+    "enabled": false,
+    "host": "192.168.1.10",
+    "port": 8830
   }
 }

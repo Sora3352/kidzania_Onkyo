@@ -24,6 +24,8 @@ class ScheduledJob:
     volume: int
     cron: dict[str, Any]
     enabled: bool = True
+    # 照明キュー(schedule.jsonのlighting_cuesで定義したid)。空文字なら照明連携なし。
+    lighting_cue: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +35,7 @@ class ScheduledJob:
             "volume": self.volume,
             "cron": self.cron,
             "enabled": self.enabled,
+            "lighting_cue": self.lighting_cue,
         }
 
 
@@ -46,6 +49,8 @@ class StageShow:
     label: str
     files: list[str]
     volume: int
+    # 照明キュー(schedule.jsonのlighting_cuesで定義したid)。空文字なら照明連携なし。
+    lighting_cue: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +58,7 @@ class StageShow:
             "label": self.label,
             "files": self.files,
             "volume": self.volume,
+            "lighting_cue": self.lighting_cue,
         }
 
 
@@ -111,6 +117,43 @@ class LinkConfig:
 
 
 @dataclass
+class LightingCue:
+    """照明卓(Zero 88 FLX S24)のプレイバックをまとめて呼び出すための名前付きキュー。
+    playback_numbersに複数指定すると、その全部に順番にGoコマンドを送信する。
+    schedule.jsonのlighting_cuesで定義し、ScheduledJob/StageShowのlighting_cueから
+    idで参照する。"""
+
+    id: str
+    label: str
+    playback_numbers: list[int]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "playback_numbers": self.playback_numbers,
+        }
+
+
+@dataclass
+class LightingConfig:
+    """照明卓との通信設定(settings.jsonの'lighting'セクション)。
+    enabled=Falseの場合はOSC送信を一切行わない(実機未接続の開発機等でも安全)。"""
+
+    enabled: bool = False
+    host: str = "192.168.1.10"
+    port: int = 8830
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "LightingConfig":
+        return LightingConfig(
+            enabled=bool(data.get("enabled", False)),
+            host=str(data.get("host", "192.168.1.10")),
+            port=int(data.get("port", 8830)),
+        )
+
+
+@dataclass
 class AppConfig:
     base_dir: Path
     media_root: Path = field(init=False)
@@ -122,6 +165,7 @@ class AppConfig:
     settings_path: Path = field(init=False)
     device_name: str = field(init=False)
     link: LinkConfig = field(init=False)
+    lighting: LightingConfig = field(init=False)
 
     def __post_init__(self) -> None:
         self.settings_path = self.base_dir / "config" / "settings.json"
@@ -135,6 +179,7 @@ class AppConfig:
         self.stage_shows_path = self.base_dir / settings["stage_shows_file"]
         self.device_name = settings.get("device_name", "")
         self.link = LinkConfig.from_dict(settings.get("link", {}))
+        self.lighting = LightingConfig.from_dict(settings.get("lighting", {}))
 
     # ------------------------------------------------------------------
     # メディアパス
@@ -150,6 +195,33 @@ class AppConfig:
             return str(path.relative_to(self.media_root)).replace("\\", "/")
         except ValueError:
             return str(path)
+
+    def validate_media_files(self) -> list[tuple[str, str]]:
+        """schedule.json/stage_shows.jsonで参照されている音源・動画ファイルが
+        実際に存在するかをまとめてチェックする。営業モードは選択中のものに
+        限らず全モードを対象にする(モード切替で初めて欠落が発覚するのを
+        防ぐため)。戻り値は存在しないもののみ(表示名, 解決後のパス)のリスト。"""
+        missing: list[tuple[str, str]] = []
+
+        def _check(name: str, file: str) -> None:
+            path = self.resolve_media(file)
+            if not path.exists():
+                missing.append((name, str(path)))
+
+        data = self._read_schedule()
+        for job in self._parse_jobs(data.get("common_jobs", [])):
+            _check(job.name, job.file)
+        for mode_jobs in data.get("modes", {}).values():
+            for job in self._parse_jobs(mode_jobs):
+                _check(job.name, job.file)
+        for job in self._parse_jobs(data.get("manual_jobs", [])):
+            _check(job.name, job.file)
+
+        for show in self.load_stage_shows():
+            for f in show.files:
+                _check(show.label, f)
+
+        return missing
 
     # ------------------------------------------------------------------
     # 営業モード
@@ -223,6 +295,7 @@ class AppConfig:
                 label=s["label"],
                 files=list(s.get("files", [])),
                 volume=int(s.get("volume", 90)),
+                lighting_cue=s.get("lighting_cue", ""),
             )
             for s in data.get("shows", [])
         ]
@@ -253,6 +326,25 @@ class AppConfig:
     def save_blackout_windows(self, windows: list[BlackoutWindow]) -> None:
         data = self._read_schedule()
         data["blackout_windows"] = [w.to_dict() for w in windows]
+        _write_json(self.schedule_path, data)
+
+    # ------------------------------------------------------------------
+    # 照明キュー(lighting_cues)
+    # ------------------------------------------------------------------
+    def load_lighting_cues(self) -> list[LightingCue]:
+        raw = self._read_schedule().get("lighting_cues", [])
+        return [
+            LightingCue(
+                id=c["id"],
+                label=c.get("label", c["id"]),
+                playback_numbers=[int(n) for n in c.get("playback_numbers", [])],
+            )
+            for c in raw
+        ]
+
+    def save_lighting_cues(self, cues: list[LightingCue]) -> None:
+        data = self._read_schedule()
+        data["lighting_cues"] = [c.to_dict() for c in cues]
         _write_json(self.schedule_path, data)
 
     # ------------------------------------------------------------------
@@ -317,6 +409,7 @@ class AppConfig:
                 volume=int(j.get("volume", 80)),
                 cron=j.get("cron", {}),
                 enabled=bool(j.get("enabled", True)),
+                lighting_cue=j.get("lighting_cue", ""),
             )
             for j in raw
         ]

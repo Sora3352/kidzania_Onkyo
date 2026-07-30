@@ -1,42 +1,279 @@
 {
   "_comment": "自動再生スケジュール。common_jobsは営業モードに関わらず常時有効(街時計など)。modesは「通し営業」「2部制営業」ごとの個別スケジュール。manual_jobsはGUIの「手動追加」タブから追加したジョブ(モードに関わらず常時有効)。active_modeは現在GUIで選択されている営業モード。cronはAPScheduler CronTriggerの引数(hour/minuteを指定、hourを省略すると毎時実行。hourに'10-18'のような範囲を指定すると、その時間帯だけ毎時minute分に実行される)。fileはmedia_rootからの相対パス(絶対パスも可)。volumeは0-100。blackout_windowsは共通/モード別/手動追加を問わず全ジョブの再生を止める時間帯(start>endなら深夜またぎ扱い)。GUIの「スケジュール管理」画面から編集可能。",
-  "active_mode": "通し営業",
-  "common_jobs": [
-    {
-      "id": "street_clock_hourly",
-      "name": "街時計ダンス音楽(毎時16分)",
-      "file": "street_clock/kidzania_Wrap up Party_loop_b2.mp3",
-      "volume": 65,
-      "cron": {
-        "minute": 27
+  "active_mode": "2部制営業",
+  "common_jobs": [],
+  "modes": {
+    "通し営業": [
+      {
+        "id": "manual_03ebf0c4",
+        "name": "ドアオープン５分前",
+        "file": "01_ドアオープン5分前スピール.wav",
+        "volume": 80,
+        "cron": {
+          "hour": 8,
+          "minute": 25
+        },
+        "enabled": true,
+        "lighting_cue": ""
       },
-      "enabled": false
+      {
+        "id": "manual_9467961c",
+        "name": "リリース",
+        "file": "調整済_50min.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": 8,
+          "minute": 50
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_1721345a",
+        "name": "Welcomダンス【部開始】",
+        "file": "調整済_Welcome.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": 9,
+          "minute": 0
+        },
+        "enabled": true,
+        "lighting_cue": "welcome_dance"
+      },
+      {
+        "id": "manual_bc77eb21",
+        "name": "街時計１回目（お祭り）",
+        "file": "【街時計】盆踊り.wav",
+        "volume": 80,
+        "cron": {
+          "hour": 9,
+          "minute": 30
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_e7f27102",
+        "name": "街時計（Welcom）",
+        "file": "調整済_街時計00.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": "10-13",
+          "minute": 0
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      }
+    ],
+    "2部制営業": [
+      {
+        "id": "manual_ad381f7c",
+        "name": "１部ドアオープン５分前",
+        "file": "01_ドアオープン5分前スピール.wav",
+        "volume": 80,
+        "cron": {
+          "hour": 8,
+          "minute": 25
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_324be68d",
+        "name": "１部リリース",
+        "file": "調整済_50min.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": 8,
+          "minute": 50
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_2d27dc5e",
+        "name": "１部Welcomダンス【部開始】",
+        "file": "調整済_Welcome.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": 9,
+          "minute": 0
+        },
+        "enabled": true,
+        "lighting_cue": "welcome_dance"
+      },
+      {
+        "id": "manual_85caf22c",
+        "name": "２部ドアオープン５分前",
+        "file": "01_ドアオープン5分前スピール.wav",
+        "volume": 80,
+        "cron": {
+          "hour": 14,
+          "minute": 55
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_2a44f4bf",
+        "name": "２部リリース",
+        "file": "調整済_50min.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": 15,
+          "minute": 20
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_3d718bfb",
+        "name": "２部Welcomダンス【部開始】",
+        "file": "調整済_Welcome.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": 15,
+          "minute": 30
+        },
+        "enabled": true,
+        "lighting_cue": "welcome_dance"
+      },
+      {
+        "id": "manual_1258f6ad",
+        "name": "１部街時計（初回）",
+        "file": "【街時計】盆踊り.wav",
+        "volume": 80,
+        "cron": {
+          "hour": 9,
+          "minute": 30
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_b1fe6bd7",
+        "name": "１部街時計（FunFunまで）",
+        "file": "調整済_街時計00.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": "10-13",
+          "minute": 0
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_dae25a98",
+        "name": "２部街時計（初回）",
+        "file": "【街時計】盆踊り.wav",
+        "volume": 80,
+        "cron": {
+          "hour": 15,
+          "minute": 30
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      },
+      {
+        "id": "manual_cfa95f0b",
+        "name": "２部街時計（FunFunまで）",
+        "file": "調整済_街時計00.mp3",
+        "volume": 80,
+        "cron": {
+          "hour": "16-18",
+          "minute": 0
+        },
+        "enabled": true,
+        "lighting_cue": ""
+      }
+    ]
+  },
+  "manual_jobs": [
+    {
+      "id": "manual_b5073954",
+      "name": "テスト街時計",
+      "file": "【街時計】盆踊り.wav",
+      "volume": 56,
+      "cron": {
+        "minute": 52
+      },
+      "enabled": false,
+      "lighting_cue": ""
     },
     {
-      "id": "manual_a00eba19",
-      "name": "Welcomフル",
-      "file": "street_clock/KZ_Welcom.mp3",
-      "volume": 80,
+      "id": "manual_7f5ab5a9",
+      "name": "テストドアオープン５分前",
+      "file": "調整済_Welcome.mp3",
+      "volume": 44,
       "cron": {
-        "minute": 47
+        "minute": 17
       },
-      "enabled": false
+      "enabled": false,
+      "lighting_cue": ""
     },
     {
-      "id": "manual_cd1614a7",
+      "id": "manual_80ed455e",
       "name": "テスト",
-      "file": "bgm/ScreenRecording_12-05-2025 00-18-18_1.mp3",
+      "file": "調整済_街時計00.mp3",
+      "volume": 56,
+      "cron": {
+        "minute": 19
+      },
+      "enabled": true,
+      "lighting_cue": ""
+    },
+    {
+      "id": "manual_0e4bb6a5",
+      "name": "テスト",
+      "file": "調整済_50min.mp3",
       "volume": 80,
       "cron": {
-        "minute": 34
+        "minute": 18
       },
-      "enabled": false
+      "enabled": false,
+      "lighting_cue": ""
     }
   ],
-  "modes": {
-    "通し営業": [],
-    "2部制営業": []
-  },
-  "manual_jobs": [],
-  "blackout_windows": []
+  "blackout_windows": [
+    {
+      "id": "blackout_f1871aaa",
+      "label": "blackout_f1871aaa",
+      "start_hour": 9,
+      "start_minute": 0,
+      "end_hour": 13,
+      "end_minute": 0,
+      "enabled": true
+    }
+  ],
+  "lighting_cues": [
+    {
+      "id": "farewell",
+      "label": "フェアウェル",
+      "playback_numbers": [
+        29
+      ]
+    },
+    {
+      "id": "fashion_show",
+      "label": "ファッションショー",
+      "playback_numbers": [
+        37
+      ]
+    },
+    {
+      "id": "funfun",
+      "label": "FUNFUN/フィナーレ/ステージダンスショー",
+      "playback_numbers": [
+        37,
+        42
+      ]
+    },
+    {
+      "id": "welcome_dance",
+      "label": "ウェルカムダンス",
+      "playback_numbers": [
+        48
+      ]
+    }
+  ]
 }

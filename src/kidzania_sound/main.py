@@ -10,6 +10,7 @@ from tkinter import messagebox
 
 from .config import AppConfig
 from .gui import MainWindow
+from .lighting import LightingController
 from .link import LinkService
 from .logging_setup import setup_logging
 from .scheduler import JobScheduler
@@ -79,6 +80,27 @@ def _restore_sleep_settings() -> None:
     ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
 
 
+def _warn_missing_media(config: AppConfig, logger) -> None:
+    """schedule.json/stage_shows.jsonが参照する音源・動画ファイルの存在確認。
+    見つからないものがあってもアプリは起動を続け、ログとダイアログで
+    知らせるのみに留める(誤操作防止・無人運用を止めないため)。"""
+    missing = config.validate_media_files()
+    if not missing:
+        return
+
+    for name, path in missing:
+        logger.warning("ファイルが見つかりません(%s): %s", name, path)
+
+    lines = [f"・{name}: {path}" for name, path in missing[:10]]
+    if len(missing) > 10:
+        lines.append(f"...ほか{len(missing) - 10}件(詳細はログを確認してください)")
+    messagebox.showwarning(
+        "音源・動画ファイルが見つかりません",
+        "以下のファイルが見つかりませんでした。該当のスケジュール/ステージショーは"
+        "再生に失敗します。ファイルの配置か設定を確認してください。\n\n" + "\n".join(lines),
+    )
+
+
 def main() -> None:
     _make_process_dpi_aware()
 
@@ -107,11 +129,13 @@ def main() -> None:
     vlc_instance = vlc.Instance()
 
     link_service = LinkService(config, logger)
+    lighting = LightingController(config.lighting, config.load_lighting_cues(), logger)
 
     scheduler = JobScheduler(
         config,
         vlc_instance,
         logger,
+        lighting,
         on_playback_started=lambda label: link_service.notify_async(
             "/event/playback-started", {"label": label}
         ),
@@ -127,8 +151,10 @@ def main() -> None:
 
     MainWindow(
         root, config, logger, vlc_instance, scheduler, on_reload_schedule=_reload_schedule,
-        link_service=link_service,
+        link_service=link_service, lighting=lighting,
     )
+
+    _warn_missing_media(config, logger)
 
     scheduler.start()
     link_service.start()

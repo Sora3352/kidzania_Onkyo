@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .config import AppConfig, BlackoutWindow, ScheduledJob
+from .lighting import LightingController
 from .player import AudioCue
 
 
@@ -18,12 +19,14 @@ class JobScheduler:
         config: AppConfig,
         vlc_instance,
         logger: logging.Logger,
+        lighting: LightingController,
         on_playback_started: Optional[Callable[[str], None]] = None,
         on_playback_ended: Optional[Callable[[str], None]] = None,
     ):
         self._config = config
         self._vlc_instance = vlc_instance
         self._logger = logger
+        self._lighting = lighting
         self._scheduler = BackgroundScheduler()
         # job_id -> (表示名, 再生中のAudioCue)。GUIの「現在再生中」パネルから参照・停止する。
         self._active_cues: dict[str, tuple[str, AudioCue]] = {}
@@ -97,6 +100,7 @@ class JobScheduler:
             self._active_cues[job.id] = (job.name, cue)
             if self._on_playback_started is not None:
                 self._on_playback_started(job.name)
+            self._lighting.trigger_cue(job.lighting_cue)
             cue.play(path, job.volume, job.name, on_finished=_on_finished)
 
         return _run

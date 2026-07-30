@@ -5,25 +5,41 @@
       "id": "dance_show",
       "label": "ラップアップパーティー",
       "files": [
-        "stage_shows/シーケンス 02_1.mp4"
+        "stage_shows/ラップアップ.mp4"
       ],
-      "volume": 100
+      "volume": 58,
+      "lighting_cue": "funfun"
     },
     {
       "id": "fashion_show",
       "label": "ファッションショー",
       "files": [
-        "stage_shows/fashion_show.mp4"
+        "ファッションショー/1オープニング.mov",
+        "ファッションショー/2おとぎ.mov",
+        "ファッションショー/3和モダン.mov",
+        "ファッションショー/4パーティー.mov",
+        "ファッションショー/5フィナーレ.mov"
       ],
-      "volume": 90
+      "volume": 50,
+      "lighting_cue": "fashion_show"
     },
     {
       "id": "fanfan_birthday",
       "label": "fanfanバースデー",
       "files": [
-        "bgm/ScreenRecording_12-05-2025 00-18-18_1.mp3"
+        "FunFun.mov"
       ],
-      "volume": 90
+      "volume": 66,
+      "lighting_cue": "funfun"
+    },
+    {
+      "id": "show_676363bc",
+      "label": "フェアウェル",
+      "files": [
+        "フェアエル.mov"
+      ],
+      "volume": 100,
+      "lighting_cue": "farewell"
     }
   ]
 }

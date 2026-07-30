@@ -20,7 +20,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
-from .config import AppConfig, BlackoutWindow, LinkConfig, ScheduledJob, StageShow
+from .config import AppConfig, BlackoutWindow, LightingCue, LinkConfig, ScheduledJob, StageShow
+from .lighting import LightingController
 from .link import LinkService
 from .player import FullscreenVideoPlayer
 from .scheduler import JobScheduler
@@ -103,6 +104,7 @@ class MainWindow:
         scheduler: JobScheduler,
         on_reload_schedule: Callable[[], None],
         link_service: LinkService,
+        lighting: LightingController,
     ):
         self._root = root
         self._config = config
@@ -110,6 +112,7 @@ class MainWindow:
         self._scheduler = scheduler
         self._on_reload_schedule = on_reload_schedule
         self._link_service = link_service
+        self._lighting = lighting
         self._duck_refcount = 0
         self._video_player = FullscreenVideoPlayer(root, vlc_instance, logger)
         self._log_queue: "queue.Queue[str]" = queue.Queue()
@@ -384,6 +387,7 @@ class MainWindow:
 
         self._video_player.play(files, show.volume, show.label, _on_finished)
         self._next_button.state(["!disabled"] if len(show.files) > 1 else ["disabled"])
+        self._lighting.trigger_cue(show.lighting_cue)
         self._link_service.notify_async("/event/playback-started", {"label": show.label})
 
     def _on_stop_clicked(self) -> None:
@@ -547,11 +551,17 @@ class JobRow:
         job=None,
         include_schedule: bool = True,
         include_enabled: bool = True,
+        lighting_cues: Optional[list[LightingCue]] = None,
     ):
         self._config = config
         self.include_schedule = include_schedule
         self.include_enabled = include_enabled
         self.removed = False
+        self._cue_label_to_id: dict[str, str] = {"(なし)": ""}
+        self._cue_id_to_label: dict[str, str] = {"": "(なし)"}
+        for cue in lighting_cues or []:
+            self._cue_label_to_id[cue.label] = cue.id
+            self._cue_id_to_label[cue.id] = cue.label
 
         prefix = "manual" if job is None else "job"
         if job is not None:
@@ -564,12 +574,14 @@ class JobRow:
         default_volume = 80
         default_cron: dict = {}
         default_enabled = True
+        default_cue_id = ""
         if job is not None:
             default_volume = job.volume
             default_file = job.file
             default_name = job.name
             default_cron = job.cron
             default_enabled = job.enabled
+            default_cue_id = job.lighting_cue
 
         self.frame = ttk.Frame(parent, relief="groove", padding=4)
         self.frame.pack(fill="x", pady=2)
@@ -659,6 +671,13 @@ class JobRow:
 
         self.volume_var.trace_add("write", _update_volume_label)
         _update_volume_label()
+
+        self.lighting_cue_var = tk.StringVar(value=self._cue_id_to_label.get(default_cue_id, "(なし)"))
+        ttk.Combobox(
+            self.frame, textvariable=self.lighting_cue_var,
+            values=list(self._cue_label_to_id.keys()), width=14, state="readonly",
+        ).grid(row=0, column=col, padx=4)
+        col += 1
 
         if include_enabled:
             self.enabled_var = tk.BooleanVar(value=default_enabled)
@@ -755,6 +774,7 @@ class JobRow:
             volume=int(self.volume_var.get()),
             cron=cron,
             enabled=enabled,
+            lighting_cue=self._cue_label_to_id.get(self.lighting_cue_var.get(), ""),
         )
 
 class ScheduleListEditor(ttk.Frame):
@@ -767,11 +787,13 @@ class ScheduleListEditor(ttk.Frame):
         jobs: list,
         include_schedule: bool = True,
         include_enabled: bool = True,
+        lighting_cues: Optional[list[LightingCue]] = None,
     ):
         super().__init__(parent)
         self._config = config
         self._include_schedule = include_schedule
         self._include_enabled = include_enabled
+        self._lighting_cues = lighting_cues or []
 
         canvas = tk.Canvas(self, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
@@ -795,6 +817,7 @@ class ScheduleListEditor(ttk.Frame):
             job=job,
             include_schedule=self._include_schedule,
             include_enabled=self._include_enabled,
+            lighting_cues=self._lighting_cues,
         )
         self.rows.append(row)
 
@@ -806,11 +829,22 @@ class StageShowRow:
     """スケジュール管理画面「ステージショー」タブの1行。
     1つのショーに複数動画(MV1/MV2…)を持たせられ、順番に一覧表示する。"""
 
-    def __init__(self, parent: ttk.Frame, config: AppConfig, show: Optional[StageShow] = None):
+    def __init__(
+        self,
+        parent: ttk.Frame,
+        config: AppConfig,
+        show: Optional[StageShow] = None,
+        lighting_cues: Optional[list[LightingCue]] = None,
+    ):
         self._config = config
         self.removed = False
         self.show_id = show.id if show is not None else f"show_{uuid.uuid4().hex[:8]}"
         self.files: list[str] = list(show.files) if show is not None else []
+        self._cue_label_to_id: dict[str, str] = {"(なし)": ""}
+        self._cue_id_to_label: dict[str, str] = {"": "(なし)"}
+        for cue in lighting_cues or []:
+            self._cue_label_to_id[cue.label] = cue.id
+            self._cue_id_to_label[cue.id] = cue.label
 
         self.frame = ttk.Frame(parent, relief="groove", padding=6)
         self.frame.pack(fill="x", pady=3)
@@ -832,6 +866,13 @@ class StageShowRow:
 
         self.volume_var.trace_add("write", _update_volume_label)
         _update_volume_label()
+
+        default_cue_id = show.lighting_cue if show is not None else ""
+        self.lighting_cue_var = tk.StringVar(value=self._cue_id_to_label.get(default_cue_id, "(なし)"))
+        ttk.Combobox(
+            header, textvariable=self.lighting_cue_var,
+            values=list(self._cue_label_to_id.keys()), width=14, state="readonly",
+        ).pack(side="left", padx=4)
 
         ttk.Button(header, text="削除", command=self._remove).pack(side="right", padx=2)
 
@@ -878,15 +919,23 @@ class StageShowRow:
             label=self.name_var.get() or self.show_id,
             files=list(self.files),
             volume=int(self.volume_var.get()),
+            lighting_cue=self._cue_label_to_id.get(self.lighting_cue_var.get(), ""),
         )
 
 
 class StageShowListEditor(ttk.Frame):
     """「ステージショー」タブの中身(複数動画対応のショー一覧)。"""
 
-    def __init__(self, parent: ttk.Frame, config: AppConfig, shows: list[StageShow]):
+    def __init__(
+        self,
+        parent: ttk.Frame,
+        config: AppConfig,
+        shows: list[StageShow],
+        lighting_cues: Optional[list[LightingCue]] = None,
+    ):
         super().__init__(parent)
         self._config = config
+        self._lighting_cues = lighting_cues or []
 
         canvas = tk.Canvas(self, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
@@ -904,7 +953,7 @@ class StageShowListEditor(ttk.Frame):
         ttk.Button(self, text="+ ショー追加", command=lambda: self._add_row(None)).pack(anchor="w", padx=5, pady=5)
 
     def _add_row(self, show: Optional[StageShow]) -> None:
-        row = StageShowRow(self._rows_frame, self._config, show)
+        row = StageShowRow(self._rows_frame, self._config, show, lighting_cues=self._lighting_cues)
         self.rows.append(row)
 
     def get_stage_shows(self) -> list[StageShow]:
@@ -1015,6 +1064,84 @@ class BlackoutWindowListEditor(ttk.Frame):
         return [r.to_blackout_window() for r in self.rows if not r.removed]
 
 
+class LightingCueRow:
+    """スケジュール管理画面「照明キュー」タブの1行。照明卓(Zero 88 FLX S24)の
+    プレイバック番号をまとめて呼び出すための名前付きキューを定義する。
+    ジョブ・ステージショー側はこのidをlighting_cueとして参照する。"""
+
+    def __init__(self, parent: ttk.Frame, cue: Optional[LightingCue] = None):
+        self.removed = False
+        self.cue_id = cue.id if cue is not None else f"cue_{uuid.uuid4().hex[:8]}"
+
+        self.frame = ttk.Frame(parent, relief="groove", padding=4)
+        self.frame.pack(fill="x", pady=2)
+
+        col = 0
+        self.label_var = tk.StringVar(value=(cue.label if cue is not None else ""))
+        ttk.Entry(self.frame, textvariable=self.label_var, width=28).grid(row=0, column=col, padx=2)
+        col += 1
+
+        ttk.Label(self.frame, text="プレイバック番号(カンマ区切り、例: 37,42)").grid(row=0, column=col, padx=(4, 2))
+        col += 1
+        default_numbers = ",".join(str(n) for n in cue.playback_numbers) if cue is not None else ""
+        self.numbers_var = tk.StringVar(value=default_numbers)
+        ttk.Entry(self.frame, textvariable=self.numbers_var, width=16).grid(row=0, column=col, padx=2)
+        col += 1
+
+        ttk.Button(self.frame, text="削除", command=self._remove).grid(row=0, column=col, padx=2)
+
+    def _remove(self) -> None:
+        self.frame.destroy()
+        self.removed = True
+
+    def to_lighting_cue(self) -> LightingCue:
+        numbers: list[int] = []
+        for part in self.numbers_var.get().split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                numbers.append(int(part))
+            except ValueError:
+                continue
+        return LightingCue(
+            id=self.cue_id,
+            label=self.label_var.get() or self.cue_id,
+            playback_numbers=numbers,
+        )
+
+
+class LightingCueListEditor(ttk.Frame):
+    """「照明キュー」タブの中身。"""
+
+    def __init__(self, parent: ttk.Frame, cues: list[LightingCue]):
+        super().__init__(parent)
+
+        canvas = tk.Canvas(self, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        self._rows_frame = ttk.Frame(canvas)
+        self._rows_frame.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self._rows_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.rows: list[LightingCueRow] = []
+        for cue in cues:
+            self._add_row(cue)
+
+        ttk.Button(self, text="+ 照明キューを追加", command=lambda: self._add_row(None)).pack(
+            anchor="w", padx=5, pady=5
+        )
+
+    def _add_row(self, cue: Optional[LightingCue]) -> None:
+        row = LightingCueRow(self._rows_frame, cue)
+        self.rows.append(row)
+
+    def get_lighting_cues(self) -> list[LightingCue]:
+        return [r.to_lighting_cue() for r in self.rows if not r.removed]
+
+
 class ScheduleManagerWindow(tk.Toplevel):
     """共通/モード別/手動追加/ステージショーの時刻・ファイル・音量をまとめて編集する画面。"""
 
@@ -1027,37 +1154,49 @@ class ScheduleManagerWindow(tk.Toplevel):
 
         self._config = config
         self._on_saved = on_saved
+        lighting_cues = config.load_lighting_cues()
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
         common_tab = ttk.Frame(notebook)
         notebook.add(common_tab, text="共通(両モード)")
-        self._common_editor = ScheduleListEditor(common_tab, config, config.load_common_jobs())
+        self._common_editor = ScheduleListEditor(
+            common_tab, config, config.load_common_jobs(), lighting_cues=lighting_cues
+        )
         self._common_editor.pack(fill="both", expand=True)
 
         self._mode_editors: dict[str, ScheduleListEditor] = {}
         for mode in config.get_mode_names():
             tab = ttk.Frame(notebook)
             notebook.add(tab, text=mode)
-            editor = ScheduleListEditor(tab, config, config.load_mode_jobs(mode))
+            editor = ScheduleListEditor(tab, config, config.load_mode_jobs(mode), lighting_cues=lighting_cues)
             editor.pack(fill="both", expand=True)
             self._mode_editors[mode] = editor
 
         manual_tab = ttk.Frame(notebook)
         notebook.add(manual_tab, text="手動追加")
-        self._manual_editor = ScheduleListEditor(manual_tab, config, config.load_manual_jobs())
+        self._manual_editor = ScheduleListEditor(
+            manual_tab, config, config.load_manual_jobs(), lighting_cues=lighting_cues
+        )
         self._manual_editor.pack(fill="both", expand=True)
 
         shows_tab = ttk.Frame(notebook)
         notebook.add(shows_tab, text="ステージショー")
-        self._shows_editor = StageShowListEditor(shows_tab, config, config.load_stage_shows())
+        self._shows_editor = StageShowListEditor(
+            shows_tab, config, config.load_stage_shows(), lighting_cues=lighting_cues
+        )
         self._shows_editor.pack(fill="both", expand=True)
 
         blackout_tab = ttk.Frame(notebook)
         notebook.add(blackout_tab, text="休止時間帯")
         self._blackout_editor = BlackoutWindowListEditor(blackout_tab, config.load_blackout_windows())
         self._blackout_editor.pack(fill="both", expand=True)
+
+        lighting_tab = ttk.Frame(notebook)
+        notebook.add(lighting_tab, text="照明キュー")
+        self._lighting_editor = LightingCueListEditor(lighting_tab, lighting_cues)
+        self._lighting_editor.pack(fill="both", expand=True)
 
         button_frame = ttk.Frame(self)
         button_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -1073,6 +1212,7 @@ class ScheduleManagerWindow(tk.Toplevel):
             messagebox.showerror("入力エラー", str(e))
             return
 
+        self._config.save_lighting_cues(self._lighting_editor.get_lighting_cues())
         self._config.save_common_jobs(common_jobs)
         for mode, jobs in mode_jobs.items():
             self._config.save_mode_jobs(mode, jobs)
