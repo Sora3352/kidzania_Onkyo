@@ -1,5 +1,5 @@
 {
-  "_comment": "アプリ全体の設定。media_root配下に実際の音源・動画ファイルを配置してください。device_nameとlinkはGUIの「システム設定」画面からも編集できる。device_nameはこの端末の名前(ウィンドウタイトルやリンク先の通知に使われる、未設定なら空のままでよい)。linkは2台のSurfaceを連携させる機能の設定(未使用ならenabled:falseのままでよく、単一PC運用に一切影響しない)。",
+  "_comment": "アプリ全体の設定。media_root配下に実際の音源・動画ファイルを配置してください。device_name/link/standby_background_imageはGUIの「システム設定」画面からも編集できる。device_nameはこの端末の名前(ウィンドウタイトルやリンク先の通知に使われる、未設定なら空のままでよい)。linkは2台のSurfaceを連携させる機能の設定(未使用ならenabled:falseのままでよく、単一PC運用に一切影響しない)。standby_background_imageはステージショー待機画面の背景画像(media_root相対パス、空文字なら黒背景)。mute_other_audio_on_startupはtrueだと起動時に自アプリ以外の音声セッションを全てミュートする(HDMI直結スピーカーへの誤音声出力事故防止、既定はtrue)。",
   "media_root": "media",
   "log_dir": "logs",
   "log_level": "INFO",
@@ -7,14 +7,16 @@
   "schedule_file": "config/schedule.json",
   "stage_shows_file": "config/stage_shows.json",
   "device_name": "ノートPC",
+  "standby_background_image": "kz背景.png",
+  "mute_other_audio_on_startup": true,
   "link": {
-    "_comment": "enabled:trueにすると2台のSurfaceを連携できる(施設内の閉域LAN・端末2台限定を前提とし、認証は行わない)。peer_hostには相手端末のIPアドレスを指定する。duck_volume_percentは相手が再生を開始した間、自機の再生中音量を元の音量の何%まで下げるか(20なら元音量の20%まで下げる)。poll_interval_secondsは接続状態の監視(1分おきを既定)と設定同期の取りこぼしに備えたフォールバック確認を兼ねる間隔(秒)。enabled/listen_port以外はGUIの「システム設定」から変更すると再起動なしで反映される。",
-    "enabled": true,
-    "peer_host": "192.168.0.23",
+    "_comment": "enabled:trueにすると2台のSurfaceを連携できる(施設内の閉域LAN・端末2台限定を前提とし、認証は行わない)。peer_hostには相手端末のIPアドレスを指定する。duck_volume_percentは相手が再生を開始した間、自機の再生中音量を元の音量の何%まで下げるか(20なら元音量の20%まで下げる)。poll_interval_secondsは接続状態の監視と設定同期の取りこぼしに備えたフォールバック確認を兼ねる間隔(秒、常時監視のため既定は1秒)。enabled/listen_port以外はGUIの「システム設定」から変更すると再起動なしで反映される。",
+    "enabled": false,
+    "peer_host": "192.168.0.21",
     "peer_port": 8765,
     "listen_port": 8765,
     "duck_volume_percent": 0,
-    "poll_interval_seconds": 10,
+    "poll_interval_seconds": 1,
     "http_timeout_seconds": 3
   },
   "lighting": {

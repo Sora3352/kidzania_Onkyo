@@ -14,6 +14,7 @@ from .lighting import LightingController
 from .link import LinkService
 from .logging_setup import setup_logging
 from .scheduler import JobScheduler
+from .system_audio import mute_other_audio_sessions
 
 # Windows: スリープ/画面消灯を抑止するためのフラグ
 ES_CONTINUOUS = 0x80000000
@@ -116,6 +117,12 @@ def main() -> None:
 
     logger.info("=== キッザニア館内音響自動化システム 起動 ===")
     _prevent_sleep(config.prevent_sleep)
+
+    if config.mute_other_audio_on_startup:
+        try:
+            mute_other_audio_sessions(logger)
+        except Exception:
+            logger.exception("他アプリの音声ミュート処理で予期しないエラーが発生しました")
 
     try:
         import vlc

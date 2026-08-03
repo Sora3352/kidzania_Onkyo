@@ -16,6 +16,9 @@ from types import SimpleNamespace
 from typing import Callable, Optional
 
 import vlc
+from PIL import Image, ImageTk
+
+from .config import AppConfig
 
 _user32 = ctypes.windll.user32
 _user32.SetWindowPos.argtypes = [
@@ -190,6 +193,22 @@ class AudioCue:
         except Exception:
             self._logger.exception("音量復帰に失敗しました")
 
+    def set_volume(self, percent: int) -> None:
+        """再生中の音量を即座に変更する(テストモードでのリアルタイム音量調整向け)。
+        以後duck()/restore()が基準にする音量もこの値に更新される。"""
+        if self._player is None:
+            return
+        self._base_volume = clamp_volume(percent)
+        self._ducked = False
+        try:
+            self._player.audio_set_volume(self._base_volume)
+        except Exception:
+            self._logger.exception("音量変更に失敗しました")
+
+    def get_volume(self) -> int:
+        """現在の基準音量(duckで下げる前の値)を返す。GUIのスライダー初期表示向け。"""
+        return self._base_volume
+
     def _make_cleanup(self, player: vlc.MediaPlayer, label: str) -> Callable:
         def _cleanup(_event) -> None:
             self._logger.info("再生終了(%s)", label)
@@ -230,10 +249,11 @@ class FullscreenVideoPlayer:
     (自動では次に進まない)。
     """
 
-    def __init__(self, root: tk.Tk, instance: vlc.Instance, logger: logging.Logger):
+    def __init__(self, root: tk.Tk, instance: vlc.Instance, logger: logging.Logger, config: AppConfig):
         self._root = root
         self._instance = instance
         self._logger = logger
+        self._config = config
         self._window: Optional[tk.Toplevel] = None
         self._player: Optional[vlc.MediaPlayer] = None
         self._poll_job: Optional[str] = None
@@ -245,6 +265,9 @@ class FullscreenVideoPlayer:
         self._volume: int = 80
         self._label: str = ""
         self._ducked: bool = False
+        # 待機黒画面/ステージ画面の背景画像(ウィンドウが存在する間、参照保持してGCを防ぐ)。
+        self._background_photo: Optional[ImageTk.PhotoImage] = None
+        self._background_label: Optional[tk.Label] = None
 
     def is_playing(self) -> bool:
         """実際に動画を再生中かどうか(待機中の黒画面はTrueにしない)。"""
@@ -255,6 +278,9 @@ class FullscreenVideoPlayer:
 
     def has_multiple_clips(self) -> bool:
         return self._playlist_index >= 0 and len(self._playlist) > 1
+
+    def current_clip_index(self) -> int:
+        return self._playlist_index
 
     def duck(self, percent: int) -> None:
         """連携先端末が再生を開始した際、元の音量のpercent%まで一時的に下げる。"""
@@ -315,10 +341,28 @@ class FullscreenVideoPlayer:
         elif self._window is not None:
             self._close_window()
 
+    def stop_playback(self) -> None:
+        """緊急停止向け: 再生中なら停止するが、待機黒画面・ステージショーモードは
+        一切解除しない(request_stop()と異なり、待機画面を閉じることがないため
+        拡張ディスプレイにWindowsのデスクトップが露出する心配がない)。
+        何も再生していなければ何もしない。"""
+        if self._player is not None:
+            self._stop_playback_keep_window()
+            if self._on_finished is not None:
+                self._on_finished()
+
     # ------------------------------------------------------------------
     # 再生
     # ------------------------------------------------------------------
-    def play(self, files: list[Path], volume: int, label: str, on_finished: Callable[[], None]) -> None:
+    def play(
+        self,
+        files: list[Path],
+        volume: int,
+        label: str,
+        on_finished: Callable[[], None],
+        start_index: int = 0,
+        black_background_on_gap: bool = False,
+    ) -> None:
         if self.is_playing():
             self._logger.warning("既に別の動画を再生中のため、再生要求を無視しました(%s)", label)
             return
@@ -340,21 +384,41 @@ class FullscreenVideoPlayer:
         else:
             self._window.title(label)
 
+        self._set_gap_background_black(black_background_on_gap)
+
         self._playlist = files
-        self._playlist_index = 0
+        self._playlist_index = start_index if 0 <= start_index < len(files) else 0
         self._volume = volume
         self._label = label
         self._on_finished = on_finished
 
         self._play_current_clip()
 
-    def next_clip(self) -> None:
-        """複数動画を持つショーで、次の動画へ切り替える(手動のみ、自動進行はしない)。"""
+    def next_clip(self) -> Optional[int]:
+        """複数動画を持つショーで、次の動画へ切り替える(手動のみ、自動進行はしない)。
+        切り替え後のクリップindexを返す(切り替えなかった場合はNone。呼び出し側が
+        そのクリップに対応する照明キューを発火する際に使う)。"""
         if not self.has_multiple_clips():
-            return
+            return None
         self._stop_playback_keep_window()
         self._playlist_index = (self._playlist_index + 1) % len(self._playlist)
         self._play_current_clip()
+        return self._playlist_index
+
+    def jump_to_clip(self, index: int) -> Optional[int]:
+        """複数動画を持つショーで、任意のクリップへ直接切り替える(ファッションショーの
+        個別ボタン等、順送りでない選択向け)。再生中でない、または範囲外のindexなら
+        Noneを返す(呼び出し側は何もしない)。既に指定クリップを再生中なら何もせず
+        そのindexを返す。"""
+        if self._player is None or not (0 <= index < len(self._playlist)):
+            return None
+        if index == self._playlist_index:
+            return self._playlist_index
+        self._stop_playback_keep_window()
+        self._playlist_index = index
+        self._play_current_clip()
+        return self._playlist_index
+        return self._playlist_index
 
     def _play_current_clip(self) -> None:
         path = self._playlist[self._playlist_index]
@@ -395,6 +459,44 @@ class FullscreenVideoPlayer:
             if self._on_finished is not None:
                 self._on_finished()
 
+    def _apply_background(self, window: tk.Toplevel, monitor) -> None:
+        """待機黒画面/ステージ画面の背景を設定する。config.standby_background_image
+        が空なら何もしない(黒背景のまま)。動画再生中はVLCの映像がこの背景
+        画像の上に重なって表示される(set_hwndでウィンドウ全面に描画されるため)。"""
+        self._background_photo = None
+        self._background_label = None
+        image_setting = self._config.standby_background_image
+        if not image_setting:
+            return
+        path = self._config.resolve_media(image_setting)
+        if not path.exists():
+            self._logger.error("待機画面の背景画像が見つかりません: %s", path)
+            return
+        try:
+            image = Image.open(path).convert("RGB").resize((monitor.width, monitor.height))
+            self._background_photo = ImageTk.PhotoImage(image)
+            bg_label = tk.Label(window, image=self._background_photo, bd=0, highlightthickness=0)
+            bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+            self._background_label = bg_label
+        except Exception:
+            self._logger.exception("待機画面の背景画像の読み込みに失敗しました: %s", path)
+            self._background_photo = None
+
+    def _set_gap_background_black(self, black: bool) -> None:
+        """クリップ切り替え時・再生終了後の空白区間で、設定された背景画像の
+        代わりに黒背景(ウィンドウ自体の黒地)を見せるかどうかを切り替える。
+        動画再生中はVLCの映像がこのラベルの上に重なって表示されるため、
+        再生中かどうかに関わらず切り替えて構わない(見た目に影響しない)。"""
+        if self._background_label is None:
+            return
+        try:
+            if black:
+                self._background_label.place_forget()
+            else:
+                self._background_label.place(x=0, y=0, relwidth=1, relheight=1)
+        except Exception:
+            self._logger.exception("背景表示の切り替えに失敗しました")
+
     def _create_window(self, label: str, monitor) -> None:
         window = tk.Toplevel(self._root)
         window.title(label)
@@ -403,13 +505,13 @@ class FullscreenVideoPlayer:
         window.geometry(f"{monitor.width}x{monitor.height}")
         window.update_idletasks()
 
+        self._apply_background(window, monitor)
+
         window.attributes("-topmost", True)
         window.bind("<Escape>", lambda _e: self.request_stop())
         window.focus_force()
-        # 動画再生中はVLCの映像がウィンドウ全面を覆うため実質見えないが、
-        # 待機(黒画面)状態でのみスタッフへの案内として表示される。
-        hint = tk.Label(window, text="ESCキーで停止/待機画面を閉じます", fg="#555555", bg="black", font=("", 10))
-        hint.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+        # ESCキー自体は引き続き有効(操作用)。ただし待機黒画面はゲスト側モニターにも
+        # 表示されるため、案内文などの表示は一切出さない(完全な黒画面のままにする)。
 
         # TkのgeometryX/Y文字列は先頭の符号を「画面端からの位置指定」フラグとして
         # 扱うため負の座標(プライマリより左/上の拡張ディスプレイ)を指定できず、
@@ -470,4 +572,6 @@ class FullscreenVideoPlayer:
             except Exception:
                 pass
             self._window = None
+        self._background_photo = None
+        self._background_label = None
         self._logger.info("待機画面を閉じました")

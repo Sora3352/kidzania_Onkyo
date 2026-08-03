@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import queue
+import socket
 import threading
 import time
 import urllib.request
@@ -32,6 +33,25 @@ _KNOWN_EVENT_PATHS = {
     "/event/mode-changed",
     "/config/push",
 }
+
+
+def get_local_ip() -> str:
+    """この端末のLAN側IPアドレスを推定する。もう1台のSurfaceの「相手端末の
+    IPアドレス」欄にそのまま入力できるよう、システム設定画面に表示するための
+    もの。実際にはパケットを送信せず(UDPソケットのconnect()はルーティング表を
+    引くだけ)、外向き通信で使われる送信元IPを取得する定番の手法。取得できない
+    環境(オフライン等)ではホスト名解決にフォールバックする。"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return ""
+    finally:
+        sock.close()
 
 
 class LinkService:
@@ -141,7 +161,7 @@ class LinkService:
         # 監視間隔(poll_interval_seconds)は設定画面から変更されうるため、
         # ループの都度読み直して次回の待機時間に反映する(再起動不要で効かせるため)。
         while self._running:
-            interval = max(5, self._config.link.poll_interval_seconds)
+            interval = max(1, self._config.link.poll_interval_seconds)
             time.sleep(interval)
             if not self._running:
                 return

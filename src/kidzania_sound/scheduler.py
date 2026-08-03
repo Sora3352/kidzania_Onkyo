@@ -13,6 +13,18 @@ from .lighting import LightingController
 from .player import AudioCue
 
 
+def _time_in_range(t: time, start: time, end: time) -> bool:
+    """半開区間[start, end)にtが含まれるか判定する。start > end は深夜またぎ
+    (例: 22:00〜翌2:00)として扱う。start == end は空区間として常にFalse
+    (休止時間帯なら「常に無効=何もブロックしない」、ジョブの有効時間帯なら
+    「常に無効=一度も再生されない」という、それぞれ安全側の意味になる)。"""
+    if start < end:
+        return start <= t < end
+    if start > end:
+        return t >= start or t < end
+    return False
+
+
 class JobScheduler:
     def __init__(
         self,
@@ -54,7 +66,10 @@ class JobScheduler:
         self._logger.info("スケジュールを再読み込みしました")
 
     def _load_jobs(self) -> None:
-        self._blackout_windows = self._config.load_blackout_windows()
+        active_mode = self._config.get_active_mode()
+        self._blackout_windows = [
+            w for w in self._config.load_blackout_windows() if not w.mode or w.mode == active_mode
+        ]
         jobs = self._config.load_active_jobs()
         for job in jobs:
             if not job.enabled:
@@ -82,12 +97,21 @@ class JobScheduler:
                 self._logger.info("次回をスキップしました: %s", job.name)
                 return
 
-            blackout = self._find_active_blackout(datetime.now())
+            now = datetime.now()
+
+            blackout = self._find_active_blackout(now)
             if blackout is not None:
                 self._logger.info(
                     "休止時間帯(%s)のため再生をスキップしました: %s", blackout.label, job.name
                 )
                 return
+
+            if job.window is not None:
+                start = time(job.window["start_hour"], job.window["start_minute"])
+                end = time(job.window["end_hour"], job.window["end_minute"])
+                if not _time_in_range(now.time(), start, end):
+                    self._logger.info("設定時間帯外のため再生をスキップしました: %s", job.name)
+                    return
 
             cue = AudioCue(self._vlc_instance, self._logger)
             path = self._config.resolve_media(job.file)
@@ -118,14 +142,8 @@ class JobScheduler:
                 continue
             start = time(window.start_hour, window.start_minute)
             end = time(window.end_hour, window.end_minute)
-            if start == end:
-                continue
-            if start < end:
-                if start <= current < end:
-                    return window
-            else:
-                if current >= start or current < end:
-                    return window
+            if _time_in_range(current, start, end):
+                return window
         return None
 
     # ------------------------------------------------------------------
@@ -142,19 +160,43 @@ class JobScheduler:
             cue.stop()
             self._logger.info("再生を手動停止しました: %s", name)
 
+    def set_active_volume(self, job_id: str, percent: int) -> None:
+        """再生中ジョブの音量をリアルタイムで変更する(不具合による大音量再生への
+        緊急対応向け)。対象が既に終了していれば何もしない。"""
+        entry = self._active_cues.get(job_id)
+        if entry is not None:
+            _name, cue = entry
+            cue.set_volume(percent)
+
+    def get_active_volume(self, job_id: str) -> Optional[int]:
+        entry = self._active_cues.get(job_id)
+        if entry is None:
+            return None
+        _name, cue = entry
+        return cue.get_volume()
+
     def get_upcoming(self, limit: int = 8) -> list[tuple]:
         """直近に実行予定のジョブを(実行時刻, job_id, 表示名)のリストで返す
-        (実行時刻が近い順)。"""
+        (実行時刻が近い順)。休止時間帯に該当し実際には再生されない予定は
+        一覧から除外する(その回のnext_run_timeが休止時間帯を抜けるまで、
+        該当ジョブは表示されない)。"""
         entries = [
             (j.next_run_time, j.id, j.name)
             for j in self._scheduler.get_jobs()
             if j.next_run_time is not None
         ]
         entries.sort(key=lambda e: e[0])
-        return entries[:limit]
+        visible = [e for e in entries if self._find_active_blackout(e[0]) is None]
+        return visible[:limit]
 
     def skip_next(self, job_id: str) -> None:
         self._skip_once.add(job_id)
+
+    def is_skipped(self, job_id: str) -> bool:
+        return job_id in self._skip_once
+
+    def cancel_skip(self, job_id: str) -> None:
+        self._skip_once.discard(job_id)
 
     # ------------------------------------------------------------------
     # リンク機能(2台のSurface連携)向け一括操作

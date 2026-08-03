@@ -4,42 +4,63 @@
     {
       "id": "dance_show",
       "label": "ラップアップパーティー",
-      "files": [
-        "stage_shows/ラップアップ.mp4"
+      "clips": [
+        {
+          "file": "stage_shows/ラップアップ.mp4",
+          "lighting_cue": "funfun"
+        }
       ],
-      "volume": 58,
-      "lighting_cue": "funfun"
+      "volume": 58
     },
     {
       "id": "fashion_show",
       "label": "ファッションショー",
-      "files": [
-        "ファッションショー/1オープニング.mov",
-        "ファッションショー/2おとぎ.mov",
-        "ファッションショー/3和モダン.mov",
-        "ファッションショー/4パーティー.mov",
-        "ファッションショー/5フィナーレ.mov"
+      "clips": [
+        {
+          "file": "ファッションショー/1オープニング.mov",
+          "lighting_cue": "fashion_show"
+        },
+        {
+          "file": "ファッションショー/2おとぎ.mov",
+          "lighting_cue": "fashion_show"
+        },
+        {
+          "file": "ファッションショー/3和モダン.mov",
+          "lighting_cue": "fashion_show"
+        },
+        {
+          "file": "ファッションショー/4パーティー.mov",
+          "lighting_cue": "fashion_show"
+        },
+        {
+          "file": "ファッションショー/5フィナーレ.mov",
+          "lighting_cue": "funfun"
+        }
       ],
-      "volume": 50,
-      "lighting_cue": "fashion_show"
+      "volume": 66,
+      "black_background_on_gap": true
     },
     {
       "id": "fanfan_birthday",
       "label": "fanfanバースデー",
-      "files": [
-        "FunFun.mov"
+      "clips": [
+        {
+          "file": "FunFun.mov",
+          "lighting_cue": "funfun"
+        }
       ],
-      "volume": 66,
-      "lighting_cue": "funfun"
+      "volume": 66
     },
     {
       "id": "show_676363bc",
       "label": "フェアウェル",
-      "files": [
-        "フェアエル.mov"
+      "clips": [
+        {
+          "file": "フェアエル.mov",
+          "lighting_cue": "farewell"
+        }
       ],
-      "volume": 100,
-      "lighting_cue": "farewell"
+      "volume": 100
     }
   ]
 }

@@ -42,27 +42,37 @@
       },
       {
         "id": "manual_bc77eb21",
-        "name": "街時計１回目（お祭り）",
+        "name": "通し街時計{00分}",
         "file": "【街時計】盆踊り.wav",
         "volume": 80,
         "cron": {
-          "hour": 9,
-          "minute": 30
-        },
-        "enabled": true,
-        "lighting_cue": ""
-      },
-      {
-        "id": "manual_e7f27102",
-        "name": "街時計（Welcom）",
-        "file": "調整済_街時計00.mp3",
-        "volume": 80,
-        "cron": {
-          "hour": "10-13",
           "minute": 0
         },
         "enabled": true,
-        "lighting_cue": ""
+        "lighting_cue": "",
+        "window": {
+          "start_hour": 9,
+          "start_minute": 30,
+          "end_hour": 17,
+          "end_minute": 0
+        }
+      },
+      {
+        "id": "manual_e7f27102",
+        "name": "通し街時計{30分｝",
+        "file": "調整済_街時計00.mp3",
+        "volume": 80,
+        "cron": {
+          "minute": 30
+        },
+        "enabled": true,
+        "lighting_cue": "",
+        "window": {
+          "start_hour": 9,
+          "start_minute": 30,
+          "end_hour": 17,
+          "end_minute": 0
+        }
       }
     ],
     "2部制営業": [
@@ -140,109 +150,115 @@
       },
       {
         "id": "manual_1258f6ad",
-        "name": "１部街時計（初回）",
+        "name": "１部街時計{00分}",
         "file": "【街時計】盆踊り.wav",
         "volume": 80,
         "cron": {
-          "hour": 9,
-          "minute": 30
-        },
-        "enabled": true,
-        "lighting_cue": ""
-      },
-      {
-        "id": "manual_b1fe6bd7",
-        "name": "１部街時計（FunFunまで）",
-        "file": "調整済_街時計00.mp3",
-        "volume": 80,
-        "cron": {
-          "hour": "10-13",
           "minute": 0
         },
         "enabled": true,
-        "lighting_cue": ""
+        "lighting_cue": "",
+        "window": {
+          "start_hour": 9,
+          "start_minute": 30,
+          "end_hour": 14,
+          "end_minute": 30
+        }
       },
       {
-        "id": "manual_dae25a98",
-        "name": "２部街時計（初回）",
+        "id": "manual_afbf5e07",
+        "name": "１部街時計{30分}",
+        "file": "調整済_街時計00.mp3",
+        "volume": 80,
+        "cron": {
+          "minute": 30
+        },
+        "enabled": true,
+        "lighting_cue": "",
+        "window": {
+          "start_hour": 9,
+          "start_minute": 30,
+          "end_hour": 14,
+          "end_minute": 30
+        }
+      },
+      {
+        "id": "manual_f14176d7",
+        "name": "2部街時計{00分}",
         "file": "【街時計】盆踊り.wav",
         "volume": 80,
         "cron": {
-          "hour": 15,
-          "minute": 30
-        },
-        "enabled": true,
-        "lighting_cue": ""
-      },
-      {
-        "id": "manual_cfa95f0b",
-        "name": "２部街時計（FunFunまで）",
-        "file": "調整済_街時計00.mp3",
-        "volume": 80,
-        "cron": {
-          "hour": "16-18",
           "minute": 0
         },
         "enabled": true,
-        "lighting_cue": ""
+        "lighting_cue": "",
+        "window": {
+          "start_hour": 16,
+          "start_minute": 0,
+          "end_hour": 20,
+          "end_minute": 0
+        }
+      },
+      {
+        "id": "manual_7115d0e6",
+        "name": "2部街時計{30分}",
+        "file": "調整済_街時計00.mp3",
+        "volume": 80,
+        "cron": {
+          "minute": 30
+        },
+        "enabled": true,
+        "lighting_cue": "",
+        "window": {
+          "start_hour": 16,
+          "start_minute": 0,
+          "end_hour": 20,
+          "end_minute": 0
+        }
       }
     ]
   },
-  "manual_jobs": [
-    {
-      "id": "manual_b5073954",
-      "name": "テスト街時計",
-      "file": "【街時計】盆踊り.wav",
-      "volume": 56,
-      "cron": {
-        "minute": 52
-      },
-      "enabled": false,
-      "lighting_cue": ""
-    },
-    {
-      "id": "manual_7f5ab5a9",
-      "name": "テストドアオープン５分前",
-      "file": "調整済_Welcome.mp3",
-      "volume": 44,
-      "cron": {
-        "minute": 17
-      },
-      "enabled": false,
-      "lighting_cue": ""
-    },
-    {
-      "id": "manual_80ed455e",
-      "name": "テスト",
-      "file": "調整済_街時計00.mp3",
-      "volume": 56,
-      "cron": {
-        "minute": 19
-      },
-      "enabled": true,
-      "lighting_cue": ""
-    },
-    {
-      "id": "manual_0e4bb6a5",
-      "name": "テスト",
-      "file": "調整済_50min.mp3",
-      "volume": 80,
-      "cron": {
-        "minute": 18
-      },
-      "enabled": false,
-      "lighting_cue": ""
-    }
-  ],
+  "manual_jobs": [],
   "blackout_windows": [
     {
       "id": "blackout_f1871aaa",
-      "label": "blackout_f1871aaa",
-      "start_hour": 9,
-      "start_minute": 0,
+      "label": "1部/通しFunFun時間帯",
+      "start_hour": 13,
+      "start_minute": 29,
       "end_hour": 13,
-      "end_minute": 0,
-      "enabled": true
+      "end_minute": 59,
+      "enabled": true,
+      "mode": ""
+    },
+    {
+      "id": "blackout_e976c40f",
+      "label": "２部FunFun時間帯",
+      "start_hour": 18,
+      "start_minute": 29,
+      "end_hour": 18,
+      "end_minute": 59,
+      "enabled": true,
+      "mode": "2部制営業"
+    },
+    {
+      "id": "blackout_827174c4",
+      "label": "通しCL後",
+      "start_hour": 17,
+      "start_minute": 5,
+      "end_hour": 8,
+      "end_minute": 24,
+      "enabled": true,
+      "mode": "通し営業"
+    },
+    {
+      "id": "blackout_f38df4e6",
+      "label": "2部制CL後",
+      "start_hour": 20,
+      "start_minute": 5,
+      "end_hour": 8,
+      "end_minute": 24,
+      "enabled": true,
+      "mode": "2部制営業"
     }
   ],
   "lighting_cues": [
@@ -262,7 +278,7 @@
     },
     {
       "id": "funfun",
-      "label": "FUNFUN/フィナーレ/ステージダンスショー",
+      "label": "FUNFUN/ステージダンスショー/ファッションショーフィナーレ",
       "playback_numbers": [
         37,
         42

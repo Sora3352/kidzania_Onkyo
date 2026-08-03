@@ -13,7 +13,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -26,9 +26,14 @@ class ScheduledJob:
     enabled: bool = True
     # 照明キュー(schedule.jsonのlighting_cuesで定義したid)。空文字なら照明連携なし。
     lighting_cue: str = ""
+    # 「時間帯」頻度で分単位の開始/終了を指定した場合の有効時間帯
+    # ({"start_hour","start_minute","end_hour","end_minute"})。Noneなら制限なし。
+    # cron自体は常時"minute"のみ(毎時トリガー)で、実際に再生するかはこのwindowで
+    # 判定する(半開区間[start, end)、start>endは深夜またぎ扱い)。
+    window: Optional[dict[str, int]] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
             "file": self.file,
@@ -37,36 +42,56 @@ class ScheduledJob:
             "enabled": self.enabled,
             "lighting_cue": self.lighting_cue,
         }
+        if self.window is not None:
+            d["window"] = self.window
+        return d
+
+
+@dataclass
+class StageShowClip:
+    """StageShow内の動画1本分。動画ごとに照明の演出が異なることがあるため、
+    lighting_cueはクリップ単位で持つ(空文字なら照明連携なし)。"""
+
+    file: str
+    lighting_cue: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"file": self.file, "lighting_cue": self.lighting_cue}
 
 
 @dataclass
 class StageShow:
-    """ステージショー1つ分。filesは再生する動画のリスト(順番に再生)。
+    """ステージショー1つ分。clipsは再生する動画のリスト(順番に再生)。
     ダンスショーのように1本だけの場合もあれば、ファッションショーのように
-    MV1・MV2…と複数本を「次のMV」ボタンで切り替える場合もある。"""
+    MV1・MV2…と複数本を「次のMV」ボタンで切り替える場合もある。動画(クリップ)を
+    切り替えるたびに、そのクリップに紐付いた照明キューが送信される。"""
 
     id: str
     label: str
-    files: list[str]
+    clips: list[StageShowClip]
     volume: int
-    # 照明キュー(schedule.jsonのlighting_cuesで定義したid)。空文字なら照明連携なし。
-    lighting_cue: str = ""
+    # クリップ切り替え時・再生終了後の「空白」区間で、設定された待機画面の
+    # 背景画像の代わりに黒背景を使うか(ファッションショーのように、動画と
+    # 動画の間に暗転を挟みたい複数クリップのショー向け)。falseなら通常通り
+    # standby_background_imageの設定に従う。
+    black_background_on_gap: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "label": self.label,
-            "files": self.files,
+            "clips": [c.to_dict() for c in self.clips],
             "volume": self.volume,
-            "lighting_cue": self.lighting_cue,
+            "black_background_on_gap": self.black_background_on_gap,
         }
 
 
 @dataclass
 class BlackoutWindow:
     """スケジュールジョブを一切実行しない時間帯(例: 12:00〜13:00は再生しない)。
-    共通/モード別/手動追加の区別なく、全ジョブに対して適用される。
-    start > end の場合は深夜またぎ(例: 22:00〜翌2:00)として扱う。"""
+    start > end の場合は深夜またぎ(例: 22:00〜翌2:00)として扱う。
+    modeは適用する営業モード名(例: "通し営業")。空文字なら営業モードを問わず
+    常に適用される(クローズ後の誤作動防止など、モードによらず効かせたい場合)。"""
 
     id: str
     label: str
@@ -75,6 +100,7 @@ class BlackoutWindow:
     end_hour: int
     end_minute: int
     enabled: bool = True
+    mode: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -85,6 +111,7 @@ class BlackoutWindow:
             "end_hour": self.end_hour,
             "end_minute": self.end_minute,
             "enabled": self.enabled,
+            "mode": self.mode,
         }
 
 
@@ -100,7 +127,9 @@ class LinkConfig:
     peer_port: int = 8765
     listen_port: int = 8765
     duck_volume_percent: int = 20
-    poll_interval_seconds: int = 60
+    # 常時監視したいという運用要望により既定値は1秒(接続状態を常にほぼリアルタイムで
+    # 把握できるようにするため)。
+    poll_interval_seconds: int = 1
     http_timeout_seconds: int = 3
 
     @staticmethod
@@ -111,7 +140,7 @@ class LinkConfig:
             peer_port=int(data.get("peer_port", 8765)),
             listen_port=int(data.get("listen_port", 8765)),
             duck_volume_percent=int(data.get("duck_volume_percent", 20)),
-            poll_interval_seconds=int(data.get("poll_interval_seconds", 60)),
+            poll_interval_seconds=int(data.get("poll_interval_seconds", 1)),
             http_timeout_seconds=int(data.get("http_timeout_seconds", 3)),
         )
 
@@ -166,6 +195,10 @@ class AppConfig:
     device_name: str = field(init=False)
     link: LinkConfig = field(init=False)
     lighting: LightingConfig = field(init=False)
+    # ステージショー待機画面の背景画像(media_root相対パス)。空文字なら黒背景。
+    standby_background_image: str = field(init=False)
+    # 起動時にこのアプリ以外の音声セッションをミュートするか(HDMI出力事故防止)。
+    mute_other_audio_on_startup: bool = field(init=False)
 
     def __post_init__(self) -> None:
         self.settings_path = self.base_dir / "config" / "settings.json"
@@ -180,6 +213,8 @@ class AppConfig:
         self.device_name = settings.get("device_name", "")
         self.link = LinkConfig.from_dict(settings.get("link", {}))
         self.lighting = LightingConfig.from_dict(settings.get("lighting", {}))
+        self.standby_background_image = settings.get("standby_background_image", "")
+        self.mute_other_audio_on_startup = bool(settings.get("mute_other_audio_on_startup", True))
 
     # ------------------------------------------------------------------
     # メディアパス
@@ -218,8 +253,8 @@ class AppConfig:
             _check(job.name, job.file)
 
         for show in self.load_stage_shows():
-            for f in show.files:
-                _check(show.label, f)
+            for clip in show.clips:
+                _check(show.label, clip.file)
 
         return missing
 
@@ -289,16 +324,29 @@ class AppConfig:
     # ------------------------------------------------------------------
     def load_stage_shows(self) -> list[StageShow]:
         data = _read_json(self.stage_shows_path)
-        return [
-            StageShow(
-                id=s["id"],
-                label=s["label"],
-                files=list(s.get("files", [])),
-                volume=int(s.get("volume", 90)),
-                lighting_cue=s.get("lighting_cue", ""),
+        shows = []
+        for s in data.get("shows", []):
+            if "clips" in s:
+                clips = [
+                    StageShowClip(file=c["file"], lighting_cue=c.get("lighting_cue", ""))
+                    for c in s["clips"]
+                ]
+            else:
+                # 旧形式(files配列 + ショー単位のlighting_cue)からの後方互換。
+                # 全クリップにショー全体のキューを引き継いだ状態で読み込み、次回保存時に
+                # クリップ単位のclips形式へ自動移行する。
+                legacy_cue = s.get("lighting_cue", "")
+                clips = [StageShowClip(file=f, lighting_cue=legacy_cue) for f in s.get("files", [])]
+            shows.append(
+                StageShow(
+                    id=s["id"],
+                    label=s["label"],
+                    clips=clips,
+                    volume=int(s.get("volume", 90)),
+                    black_background_on_gap=bool(s.get("black_background_on_gap", False)),
+                )
             )
-            for s in data.get("shows", [])
-        ]
+        return shows
 
     def save_stage_shows(self, shows: list[StageShow]) -> None:
         data = _read_json(self.stage_shows_path)
@@ -319,6 +367,7 @@ class AppConfig:
                 end_hour=int(b.get("end_hour", 0)),
                 end_minute=int(b.get("end_minute", 0)),
                 enabled=bool(b.get("enabled", True)),
+                mode=b.get("mode", ""),
             )
             for b in raw
         ]
@@ -365,13 +414,18 @@ class AppConfig:
     # ------------------------------------------------------------------
     # システム設定(端末名・リンク設定)
     # ------------------------------------------------------------------
-    def save_system_settings(self, device_name: str, link: LinkConfig) -> None:
+    def save_system_settings(
+        self, device_name: str, link: LinkConfig, standby_background_image: str = ""
+    ) -> None:
         """GUIの「システム設定」画面から呼ばれる。settings.jsonに保存し、
-        メモリ上のdevice_name/linkも即座に更新する(peer_host/peer_port/
-        duck_volume_percent/poll_interval_secondsは次回通信・次回ポーリングから
-        即座に反映される。enabled/listen_portの変更はサーバー再起動が必要)。"""
+        メモリ上のdevice_name/link/standby_background_imageも即座に更新する
+        (peer_host/peer_port/duck_volume_percent/poll_interval_secondsは次回通信・
+        次回ポーリングから即座に反映される。enabled/listen_portの変更はサーバー
+        再起動が必要。standby_background_imageは次回ステージショーモードON時から
+        反映される)。"""
         data = _read_json(self.settings_path)
         data["device_name"] = device_name
+        data["standby_background_image"] = standby_background_image
         # 既存の"link"辞書を丸ごと差し替えるのではなく更新する。"_comment"等、
         # このアプリが関知しない既存キーを保存のたびに消してしまわないため。
         existing_link = data.get("link")
@@ -392,6 +446,7 @@ class AppConfig:
         _write_json(self.settings_path, data)
         self.device_name = device_name
         self.link = link
+        self.standby_background_image = standby_background_image
 
     # ------------------------------------------------------------------
     # 内部ヘルパー
@@ -401,18 +456,29 @@ class AppConfig:
 
     @staticmethod
     def _parse_jobs(raw: list[dict[str, Any]]) -> list[ScheduledJob]:
-        return [
-            ScheduledJob(
-                id=j["id"],
-                name=j["name"],
-                file=j["file"],
-                volume=int(j.get("volume", 80)),
-                cron=j.get("cron", {}),
-                enabled=bool(j.get("enabled", True)),
-                lighting_cue=j.get("lighting_cue", ""),
+        jobs = []
+        for j in raw:
+            window = j.get("window")
+            if window is not None:
+                window = {
+                    "start_hour": int(window.get("start_hour", 0)),
+                    "start_minute": int(window.get("start_minute", 0)),
+                    "end_hour": int(window.get("end_hour", 23)),
+                    "end_minute": int(window.get("end_minute", 59)),
+                }
+            jobs.append(
+                ScheduledJob(
+                    id=j["id"],
+                    name=j["name"],
+                    file=j["file"],
+                    volume=int(j.get("volume", 80)),
+                    cron=j.get("cron", {}),
+                    enabled=bool(j.get("enabled", True)),
+                    lighting_cue=j.get("lighting_cue", ""),
+                    window=window,
+                )
             )
-            for j in raw
-        ]
+        return jobs
 
 
 def _read_json(path: Path) -> dict[str, Any]:
