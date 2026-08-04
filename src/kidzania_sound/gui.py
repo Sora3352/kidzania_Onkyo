@@ -68,7 +68,8 @@ def _maximize_window(window: tk.Wm) -> None:
     誤って計算し、画面からはみ出すことがある(例: ボタンが画面外に出て押せない)。
     そのためWin32 APIから実際の作業領域(タスクバーを除いた表示可能領域)を
     取得し、その85%程度・中央配置のサイズで直接ウィンドウを配置する
-    (画面いっぱいにすると逆に端のボタンが押しづらくなるため、余白を残す)。"""
+    (画面いっぱいにすると逆に端のボタンが押しづらくなるため、余白を残す)。
+    スケジュール管理画面などのサブ画面向け(ホーム画面自体は_fullscreen_window()を使う)。"""
     try:
         rect = wintypes.RECT()
         ctypes.windll.user32.SystemParametersInfoW(_SPI_GETWORKAREA, 0, ctypes.byref(rect), 0)
@@ -81,6 +82,24 @@ def _maximize_window(window: tk.Wm) -> None:
         window.geometry(f"{width}x{height}+{x}+{y}")
     except Exception:
         window.geometry("1000x700")
+
+
+def _fullscreen_window(window: tk.Tk) -> None:
+    """ホーム画面(メインウィンドウ)を、タイトルバー・タスクバーなしの
+    枠なし完全フルスクリーンでプライマリモニター全体に表示する。起動時に
+    スタッフの操作なしで自動的にこの状態になる。Windowsの仕様上プライマリ
+    モニターの原点は常に(0, 0)であるため、work areaではなく実解像度
+    (GetSystemMetrics)をそのまま使う(タスクバー領域も覆う)。
+    タイトルバーが無くなり通常の[×]ボタンで閉じられなくなるため、
+    ヘッダーに代わりの「終了」ボタンを用意している(MainWindow._build_header)。"""
+    try:
+        width = ctypes.windll.user32.GetSystemMetrics(0)  # SM_CXSCREEN
+        height = ctypes.windll.user32.GetSystemMetrics(1)  # SM_CYSCREEN
+    except Exception:
+        width, height = 1280, 720
+    window.overrideredirect(True)
+    window.geometry(f"{width}x{height}+0+0")
+    window.focus_force()
 
 
 _BASE_FONT_SIZE = 13
@@ -159,7 +178,7 @@ class MainWindow:
         self._test_mode_window: Optional["TestModeWindow"] = None
 
         self._update_title()
-        _maximize_window(root)
+        _fullscreen_window(root)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         _configure_styles(root)
@@ -300,6 +319,25 @@ class MainWindow:
         self._add_header_icon_button(
             header, "icon_testmode.png", self._open_test_mode, "テストモード"
         )
+
+        # ホーム画面は枠なし完全フルスクリーン(_fullscreen_window)のため、
+        # 通常のウィンドウにあるはずの[×]で閉じる手段が無い。その代わりの
+        # 終了操作としてヘッダー右端に置く(_on_close()に処理を委譲するため、
+        # 再生中の確認ダイアログ等は通常の終了操作と同じ)。
+        tk.Button(
+            header,
+            text="終了",
+            command=self._on_close,
+            bg=_HEADER_COLOR,
+            activebackground=_HEADER_COLOR_ACTIVE,
+            fg="white",
+            activeforeground="white",
+            bd=0,
+            highlightthickness=0,
+            font=("", 12, "bold"),
+            cursor="hand2",
+            padx=14,
+        ).pack(side="right", pady=6, padx=16)
 
     def _add_header_icon_button(
         self, header: tk.Frame, icon_filename: str, command: Callable[[], None], alt_text: str
@@ -797,6 +835,8 @@ class MainWindow:
             self._device_name_label.pack(side="left", padx=(16, 6), pady=10)
         else:
             self._device_name_label.pack_forget()
+        # カーソル制限のON/OFFを、表示モードを切り替えなくても即座に反映する。
+        self._video_player.apply_cursor_confinement()
 
     # ------------------------------------------------------------------
     # リンク機能(2台のSurface連携)
@@ -898,6 +938,9 @@ class MainWindow:
             if not messagebox.askyesno("終了確認", "ステージショー再生中です。終了しますか?"):
                 return
         self._close_test_mode_window()
+        # カーソル範囲制限(ClipCursor)はプロセス終了時にOSが自動解除するのが
+        # 通常の挙動だが、念のため明示的に解除してから終了する。
+        self._video_player.release_cursor_confinement()
         self._root.destroy()
 
 
@@ -2295,6 +2338,14 @@ class SystemSettingsWindow(tk.Toplevel):
         ttk.Entry(form, textvariable=self.device_name_var, width=24).grid(row=row, column=1, sticky="w", pady=4)
         row += 1
 
+        self.confine_cursor_var = tk.BooleanVar(value=config.confine_cursor_to_primary_monitor)
+        ttk.Checkbutton(
+            form,
+            text="外部ディスプレイへカーソルが移動しないよう制限する(ミラーリング中は除く)",
+            variable=self.confine_cursor_var,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=4)
+        row += 1
+
         ttk.Separator(form, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
         row += 1
 
@@ -2353,6 +2404,29 @@ class SystemSettingsWindow(tk.Toplevel):
         ttk.Spinbox(form, from_=1, to=600, textvariable=self.poll_interval_var, width=8).grid(
             row=row, column=1, sticky="w", pady=4
         )
+        row += 1
+
+        ttk.Separator(form, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
+        row += 1
+
+        ttk.Label(form, text="スケジュール音源の再生準備", font=("", 13, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w"
+        )
+        row += 1
+
+        ttk.Label(form, text="再生開始の遅延(秒、頭切れ対策)").grid(row=row, column=0, sticky="w", pady=4)
+        self.prepare_delay_var = tk.StringVar(value=f"{config.playback_prepare_delay_seconds:.1f}")
+        ttk.Spinbox(
+            form, from_=0.0, to=10.0, increment=0.1, format="%.1f",
+            textvariable=self.prepare_delay_var, width=8,
+        ).grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        ttk.Label(
+            form,
+            text="発火時刻に無音で準備してから遅延後に再生することで頭切れを防ぐ(0で従来通り即再生)",
+            foreground="#666666",
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
         row += 1
 
         ttk.Separator(form, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
@@ -2425,6 +2499,14 @@ class SystemSettingsWindow(tk.Toplevel):
             return default
         return max(lo, min(hi, n))
 
+    @staticmethod
+    def _safe_float(value: str, lo: float, hi: float, default: float) -> float:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, n))
+
     def _copy_own_ip(self) -> None:
         self.clipboard_clear()
         self.clipboard_append(self._own_ip)
@@ -2478,9 +2560,11 @@ class SystemSettingsWindow(tk.Toplevel):
             return
 
         slideshow_interval_seconds = self._safe_int(self.slideshow_interval_var.get(), 1, 600, 8)
+        prepare_delay_seconds = self._safe_float(self.prepare_delay_var.get(), 0.0, 10.0, 1.0)
+        confine_cursor = self.confine_cursor_var.get()
         self._config.save_system_settings(
             device_name, link, self._background_image_value, self._slideshow_folder_value,
-            slideshow_interval_seconds,
+            slideshow_interval_seconds, prepare_delay_seconds, confine_cursor,
         )
         self._on_saved()
         messagebox.showinfo(
@@ -2489,6 +2573,8 @@ class SystemSettingsWindow(tk.Toplevel):
             "リンク機能の有効/無効・待受ポート番号の変更を反映するには、アプリを再起動してください。\n"
             "待機画面の背景は次に「ショー」に切り替えたときから、スライドショーのフォルダーは"
             "次に「通常」に切り替えたときから反映されます(現在表示中の内容には即時反映されません)。\n"
-            "スライドの表示時間は、表示中でも次のスライド切替のタイミングから反映されます。",
+            "スライドの表示時間は、表示中でも次のスライド切替のタイミングから反映されます。\n"
+            "再生開始の遅延は、次回以降のスケジュール音源の発火から反映されます。\n"
+            "カーソルの移動制限は今すぐ反映されます。",
         )
         self.destroy()

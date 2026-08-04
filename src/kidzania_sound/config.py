@@ -236,6 +236,14 @@ class AppConfig:
     slideshow_interval_seconds: int = field(init=False)
     # 起動時にこのアプリ以外の音声セッションをミュートするか(HDMI出力事故防止)。
     mute_other_audio_on_startup: bool = field(init=False)
+    # スケジュール音源の再生開始を実発火時刻から何秒遅らせるか(秒、小数可)。
+    # 発火時刻には無音でオーディオデバイス/デコーダーを準備しておき、この秒数後に
+    # 本来の音量で再生を再開することで、再生開始直後の頭切れを防ぐ(0なら即座に再生)。
+    playback_prepare_delay_seconds: float = field(init=False)
+    # 通常/ショーモード中、スタッフの誤操作でカーソルが会場側の拡張ディスプレイに
+    # 映り込まないよう、プライマリモニター内にカーソルを閉じ込めるか。ミラーリング
+    # モード中は(このフラグに関わらず)常に制限しない。falseにすると常に制限しない。
+    confine_cursor_to_primary_monitor: bool = field(init=False)
 
     def __post_init__(self) -> None:
         self.settings_path = self.base_dir / "config" / "settings.json"
@@ -254,6 +262,12 @@ class AppConfig:
         self.slideshow_folder = settings.get("slideshow_folder", "")
         self.slideshow_interval_seconds = int(settings.get("slideshow_interval_seconds", 8))
         self.mute_other_audio_on_startup = bool(settings.get("mute_other_audio_on_startup", True))
+        self.playback_prepare_delay_seconds = max(
+            0.0, float(settings.get("playback_prepare_delay_seconds", 1.0))
+        )
+        self.confine_cursor_to_primary_monitor = bool(
+            settings.get("confine_cursor_to_primary_monitor", True)
+        )
 
     # ------------------------------------------------------------------
     # メディアパス
@@ -494,21 +508,28 @@ class AppConfig:
         standby_background_image: str = "",
         slideshow_folder: str = "",
         slideshow_interval_seconds: int = 8,
+        playback_prepare_delay_seconds: float = 1.0,
+        confine_cursor_to_primary_monitor: bool = True,
     ) -> None:
         """GUIの「システム設定」画面から呼ばれる。settings.jsonに保存し、
         メモリ上のdevice_name/link/standby_background_image/slideshow_folder/
-        slideshow_interval_secondsも即座に更新する(peer_host/peer_port/
+        slideshow_interval_seconds/playback_prepare_delay_seconds/
+        confine_cursor_to_primary_monitorも即座に更新する(peer_host/peer_port/
         duck_volume_percent/poll_interval_secondsは次回通信・次回ポーリングから
         即座に反映される。enabled/listen_portの変更はサーバー再起動が必要。
         standby_background_imageは次回「ショー」表示への切り替え時から、
         slideshow_folderは次回「通常」表示への切り替え時から反映される。
         slideshow_interval_secondsはスライドショー表示中でも次のスライド切替
-        タイミングから反映される)。"""
+        タイミングから反映される。playback_prepare_delay_secondsは次回のスケジュール
+        音源発火から反映される。confine_cursor_to_primary_monitorは呼び出し側が
+        カーソル制限を再適用すれば即座に反映される)。"""
         data = _read_json(self.settings_path)
         data["device_name"] = device_name
         data["standby_background_image"] = standby_background_image
         data["slideshow_folder"] = slideshow_folder
         data["slideshow_interval_seconds"] = slideshow_interval_seconds
+        data["playback_prepare_delay_seconds"] = playback_prepare_delay_seconds
+        data["confine_cursor_to_primary_monitor"] = confine_cursor_to_primary_monitor
         # 既存の"link"辞書を丸ごと差し替えるのではなく更新する。"_comment"等、
         # このアプリが関知しない既存キーを保存のたびに消してしまわないため。
         existing_link = data.get("link")
@@ -532,6 +553,8 @@ class AppConfig:
         self.standby_background_image = standby_background_image
         self.slideshow_folder = slideshow_folder
         self.slideshow_interval_seconds = slideshow_interval_seconds
+        self.playback_prepare_delay_seconds = max(0.0, playback_prepare_delay_seconds)
+        self.confine_cursor_to_primary_monitor = confine_cursor_to_primary_monitor
 
     # ------------------------------------------------------------------
     # 内部ヘルパー

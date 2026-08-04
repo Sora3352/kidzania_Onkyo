@@ -1,5 +1,5 @@
 {
-  "_comment": "アプリ全体の設定。media_root配下に実際の音源・動画ファイルを配置してください。device_name/link/standby_background_image/slideshow_folder/slideshow_interval_secondsはGUIの「システム設定」画面からも編集できる。device_nameはこの端末の名前(ウィンドウタイトルやリンク先の通知に使われる、未設定なら空のままでよい)。linkは2台のSurfaceを連携させる機能の設定(未使用ならenabled:falseのままでよく、単一PC運用に一切影響しない)。standby_background_imageは「ショー」表示モードの待機画面の背景画像(media_root相対パス、空文字なら黒背景)。slideshow_folderは「通常」表示モードでスライドショー表示する画像フォルダー(media_root相対パス、空文字なら何も表示しない)。slideshow_interval_secondsはスライドショーの1枚あたりの表示時間(秒、既定8)。mute_other_audio_on_startupはtrueだと起動時に自アプリ以外の音声セッションを全てミュートする(HDMI直結スピーカーへの誤音声出力事故防止、既定はtrue)。",
+  "_comment": "アプリ全体の設定。media_root配下に実際の音源・動画ファイルを配置してください。device_name/link/standby_background_image/slideshow_folder/slideshow_interval_seconds/playback_prepare_delay_seconds/confine_cursor_to_primary_monitorはGUIの「システム設定」画面からも編集できる。device_nameはこの端末の名前(ウィンドウタイトルやリンク先の通知に使われる、未設定なら空のままでよい)。linkは2台のSurfaceを連携させる機能の設定(未使用ならenabled:falseのままでよく、単一PC運用に一切影響しない)。standby_background_imageは「ショー」表示モードの待機画面の背景画像(media_root相対パス、空文字なら黒背景)。slideshow_folderは「通常」表示モードでスライドショー表示する画像フォルダー(media_root相対パス、空文字なら何も表示しない)。slideshow_interval_secondsはスライドショーの1枚あたりの表示時間(秒、既定8)。mute_other_audio_on_startupはtrueだと起動時に自アプリ以外の音声セッションを全てミュートする(HDMI直結スピーカーへの誤音声出力事故防止、既定はtrue)。playback_prepare_delay_secondsはスケジュール音源の再生開始を、実際の発火時刻から何秒遅らせて本再生するか(秒、小数指定可、既定1.0)。発火時刻に無音状態でオーディオデバイス/デコーダーを準備してから遅延後に本来の音量で再生することで、再生開始直後の頭切れを防ぐ。0にすると従来通り即座に再生する。confine_cursor_to_primary_monitorはtrueだと通常/ショーモード中、カーソルがプライマリモニター(このアプリのホーム画面がある側)から外部の拡張ディスプレイへ移動しないよう制限する(会場側スクリーンへのカーソル映り込み防止、既定はtrue)。ミラーリングモード中はこの設定に関わらず常に制限しない。",
   "media_root": "media",
   "log_dir": "logs",
   "log_level": "INFO",
@@ -9,8 +9,10 @@
   "device_name": "ノートPC",
   "standby_background_image": "kz背景.png",
   "slideshow_folder": "C:\\Users\\haruk\\OneDrive\\デスクトップ\\デスクトップ用\\デスクトップ用2",
-  "slideshow_interval_seconds": 8,
+  "slideshow_interval_seconds": 20,
   "mute_other_audio_on_startup": true,
+  "playback_prepare_delay_seconds": 1.0,
+  "confine_cursor_to_primary_monitor": true,
   "link": {
     "_comment": "enabled:trueにすると2台のSurfaceを連携できる(施設内の閉域LAN・端末2台限定を前提とし、認証は行わない)。peer_hostには相手端末のIPアドレスを指定する。duck_volume_percentは相手が再生を開始した間、自機の再生中音量を元の音量の何%まで下げるか(20なら元音量の20%まで下げる)。poll_interval_secondsは接続状態の監視と設定同期の取りこぼしに備えたフォールバック確認を兼ねる間隔(秒、常時監視のため既定は1秒)。enabled/listen_port以外はGUIの「システム設定」から変更すると再起動なしで反映される。",
     "enabled": false,

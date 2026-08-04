@@ -167,11 +167,23 @@ class JobScheduler:
                 if self._on_playback_ended is not None:
                     self._on_playback_ended(job.name)
 
+            def _on_ready() -> None:
+                # 実際に音が出始める瞬間(準備遅延がある場合はその後)に照明キューの
+                # 発火と連携先端末への再生開始通知(ダッキング用)を行い、音とずれない
+                # ようにする。
+                self._lighting.trigger_cue(job.lighting_cue)
+                if self._on_playback_started is not None:
+                    self._on_playback_started(job.name)
+
             self._active_cues[job.id] = (job.name, cue)
-            if self._on_playback_started is not None:
-                self._on_playback_started(job.name)
-            self._lighting.trigger_cue(job.lighting_cue)
-            cue.play(path, job.volume, job.name, on_finished=_on_finished)
+            cue.play(
+                path,
+                job.volume,
+                job.name,
+                on_finished=_on_finished,
+                prepare_delay=self._config.playback_prepare_delay_seconds,
+                on_ready=_on_ready,
+            )
 
         return _run
 

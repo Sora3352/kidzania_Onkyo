@@ -26,15 +26,29 @@ from .config import AppConfig
 _FADE_DURATION_SECONDS = 1.5
 _FADE_STEPS = 20
 
+# AudioCue.play()のprepare_delay(頭切れ対策の準備遅延)向け。
+# Playing状態への遷移を待つ上限(通常は数十ms程度で遷移するが、遅い場合に
+# 備えた安全弁。prepare_delay自体がこれより短ければそちらを優先する)。
+_PREPARE_STATE_WAIT_TIMEOUT_SECONDS = 1.0
+_PREPARE_POLL_INTERVAL_SECONDS = 0.01
+
 _user32 = ctypes.windll.user32
 _user32.SetWindowPos.argtypes = [
     ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint,
 ]
 _user32.SetWindowPos.restype = ctypes.c_bool
 
+# カーソルを画面範囲に閉じ込める(外部ディスプレイへのカーソル移動防止)ための
+# ClipCursor(NULLを渡すと解除)。RECTへのポインタを渡すのでNoneも渡せるよう
+# argtypesをPOINTERにしておく(ctypesはPOINTER引数にNoneを渡すとNULLになる)。
+_user32.ClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+_user32.ClipCursor.restype = wintypes.BOOL
+
 _HWND_TOPMOST = ctypes.c_void_p(-1)
 _SWP_SHOWWINDOW = 0x0040
 _GA_ROOT = 2
+_SM_CXSCREEN = 0
+_SM_CYSCREEN = 1
 
 
 def _top_level_hwnd(hwnd: int) -> int:
@@ -52,6 +66,15 @@ def _move_window_to_monitor(hwnd: int, x: int, y: int, width: int, height: int) 
     正しく指定できない。そのためWin32 APIで直接ウィンドウ位置を指定する。"""
     target_hwnd = _top_level_hwnd(hwnd)
     _user32.SetWindowPos(ctypes.c_void_p(target_hwnd), _HWND_TOPMOST, x, y, width, height, _SWP_SHOWWINDOW)
+
+
+def _primary_monitor_rect() -> wintypes.RECT:
+    """プライマリモニターの範囲を返す(Windowsの仕様上、プライマリモニターの
+    原点は常に仮想デスクトップ座標の(0, 0)になる)。カーソルをプライマリモニター
+    内に閉じ込める(外部ディスプレイへの移動を防ぐ)際の範囲指定に使う。"""
+    width = ctypes.windll.user32.GetSystemMetrics(_SM_CXSCREEN)
+    height = ctypes.windll.user32.GetSystemMetrics(_SM_CYSCREEN)
+    return wintypes.RECT(0, 0, width, height)
 
 
 def clamp_volume(volume: int) -> int:
@@ -127,7 +150,23 @@ class AudioCue:
         self._ducked: bool = False
         self._fading: bool = False
 
-    def play(self, path: Path, volume: int, label: str, on_finished: Optional[Callable[[], None]] = None) -> None:
+    def play(
+        self,
+        path: Path,
+        volume: int,
+        label: str,
+        on_finished: Optional[Callable[[], None]] = None,
+        prepare_delay: float = 0.0,
+        on_ready: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """音源を再生する。prepare_delayを正の値にすると、スケジュール発火時刻
+        ちょうどに再生を開始せず、まず無音状態でオーディオデバイス/デコーダーの
+        準備だけを済ませたうえで一時停止し、prepare_delay秒後に本来の音量で
+        再生を再開する(オーディオデバイスが直前まで無音だった場合に起きがちな
+        再生開始直後の頭切れ対策)。0以下なら従来通り即座に再生する。
+        on_readyは実際に音が出始める瞬間(prepare_delayが0以下なら即座に、
+        正の値ならその秒数後)に呼ばれる。照明キューのように音の出始めと
+        同期させたい処理はこちらに渡す。"""
         self._on_finished = on_finished
 
         if not path.exists():
@@ -142,19 +181,79 @@ class AudioCue:
             player.set_media(media)
             self._base_volume = clamp_volume(volume)
             self._ducked = False
-            player.audio_set_volume(self._base_volume)
 
             events = player.event_manager()
             events.event_attach(vlc.EventType.MediaPlayerEndReached, self._make_cleanup(player, label))
             events.event_attach(vlc.EventType.MediaPlayerEncounteredError, self._make_error_handler(player, label))
 
             self._player = player
-            player.play()
-            self._logger.info("再生開始(%s): %s (volume=%d)", label, path.name, volume)
+
+            if prepare_delay > 0:
+                # 無音のまま再生開始し、実際にPlaying状態へ遷移し次第すぐ一時停止する
+                # ことで、頭出し位置(≒0秒)を保ったままオーディオデバイスと
+                # デコーダーの初期化だけを先に済ませておく。実際に音が出るのは
+                # prepare_delay秒後、_prepare_then_play()が一時停止を解除した時点から。
+                player.audio_set_volume(0)
+                player.play()
+                self._logger.info(
+                    "再生準備開始(%s): %s (volume=%d, 準備遅延=%.2f秒)", label, path.name, volume, prepare_delay
+                )
+                threading.Thread(
+                    target=self._prepare_then_play, args=(player, label, prepare_delay, on_ready), daemon=True
+                ).start()
+            else:
+                player.audio_set_volume(self._base_volume)
+                player.play()
+                self._logger.info("再生開始(%s): %s (volume=%d)", label, path.name, volume)
+                if on_ready is not None:
+                    on_ready()
         except Exception:
             self._logger.exception("再生に失敗しました(%s): %s", label, path)
             if on_finished is not None:
                 on_finished()
+
+    def _prepare_then_play(
+        self, player: vlc.MediaPlayer, label: str, delay: float, on_ready: Optional[Callable[[], None]]
+    ) -> None:
+        started = time.monotonic()
+        deadline = started + min(delay, _PREPARE_STATE_WAIT_TIMEOUT_SECONDS)
+        while time.monotonic() < deadline:
+            if self._player is not player:
+                return
+            try:
+                state = player.get_state()
+            except Exception:
+                return
+            if state == vlc.State.Playing:
+                try:
+                    player.set_pause(1)
+                except Exception:
+                    pass
+                break
+            if state in (vlc.State.Error, vlc.State.Ended, vlc.State.Stopped):
+                return
+            time.sleep(_PREPARE_POLL_INTERVAL_SECONDS)
+
+        remaining = delay - (time.monotonic() - started)
+        if remaining > 0:
+            time.sleep(remaining)
+
+        # 待機中にstop()/fade_out_and_stop()等で別のプレイヤーに差し替わっている
+        # (または解放済みの)場合は何もしない。
+        if self._player is not player:
+            return
+        try:
+            # duck()が待機中に呼ばれていた場合はそちらの音量を優先し、
+            # そうでなければ本来の音量に戻したうえで一時停止を解除する。
+            if not self._ducked:
+                player.audio_set_volume(self._base_volume)
+            player.set_pause(0)
+            self._logger.info("再生開始(%s)", label)
+        except Exception:
+            self._logger.exception("準備後の再生開始に失敗しました(%s)", label)
+            return
+        if on_ready is not None:
+            on_ready()
 
     def stop(self) -> None:
         """即座に停止する(緊急停止向け。GUIの「現在再生中」パネルからは
@@ -414,6 +513,7 @@ class FullscreenVideoPlayer:
           モードに応じた内容(スライドショー/待機画面)を表示する。見つからない
           場合は接続監視ループ(_poll_monitor)が検出でき次第自動的に開く"""
         self._display_mode = mode
+        self.apply_cursor_confinement()
         if mode == self.DISPLAY_MODE_MIRROR:
             self.force_close()
             return
@@ -425,6 +525,33 @@ class FullscreenVideoPlayer:
         else:
             self._window.title(self._window_label_for_mode())
         self._refresh_window_content()
+
+    # ------------------------------------------------------------------
+    # カーソル制限(外部ディスプレイへのカーソル移動防止)
+    # ------------------------------------------------------------------
+    def apply_cursor_confinement(self) -> None:
+        """通常/ショーモードでは、営業中のスタッフの誤操作でカーソルが会場側の
+        拡張ディスプレイに映り込まないよう、プライマリモニター内にカーソルを
+        閉じ込める。ミラーリングモード(PC画面を意図的に拡張ディスプレイへ
+        出力している状態)や、設定でこの機能自体がOFFの場合は制限しない。
+        表示モードの切り替え時に加え、設定画面での有効/無効切り替え直後にも
+        即座に反映させたい場合に呼び直せるよう公開メソッドにしている。"""
+        if not self._config.confine_cursor_to_primary_monitor or self._display_mode == self.DISPLAY_MODE_MIRROR:
+            self.release_cursor_confinement()
+            return
+        try:
+            rect = _primary_monitor_rect()
+            _user32.ClipCursor(ctypes.byref(rect))
+        except Exception:
+            self._logger.exception("カーソルの範囲制限に失敗しました")
+
+    def release_cursor_confinement(self) -> None:
+        """カーソルの範囲制限を解除する(ミラーリング切替時・設定OFF時・
+        アプリ終了時に呼ぶ)。制限していない状態で呼んでも無害。"""
+        try:
+            _user32.ClipCursor(None)
+        except Exception:
+            self._logger.exception("カーソルの範囲制限解除に失敗しました")
 
     def _refresh_window_content(self) -> None:
         """現在の表示モードに応じて、待機画面(背景画像/黒)かスライドショーかを
