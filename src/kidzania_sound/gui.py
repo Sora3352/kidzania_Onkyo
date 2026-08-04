@@ -28,6 +28,7 @@ from .config import (
     ScheduledJob,
     StageShow,
     StageShowClip,
+    StageShowJob,
 )
 from .lighting import LightingController
 from .link import LinkService, get_local_ip
@@ -50,9 +51,16 @@ IMAGE_FILETYPES = [
 _SPI_GETWORKAREA = 0x0030
 
 _HEADER_COLOR = "#c4044b"
+_HEADER_COLOR_ACTIVE = "#930338"
 _SUBHEADER_COLOR = "#F8981D"
 _START_COLOR = "#2e7d32"
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+
+_DISPLAY_MODE_LABELS = {
+    FullscreenVideoPlayer.DISPLAY_MODE_NORMAL: "通常",
+    FullscreenVideoPlayer.DISPLAY_MODE_SHOW: "ショー",
+    FullscreenVideoPlayer.DISPLAY_MODE_MIRROR: "ミラーリング",
+}
 
 
 def _maximize_window(window: tk.Wm) -> None:
@@ -131,14 +139,22 @@ class MainWindow:
         self._vlc_instance = vlc_instance
         self._duck_refcount = 0
         self._current_show: Optional[StageShow] = None
-        self._video_player = FullscreenVideoPlayer(root, vlc_instance, logger, config)
+        self._video_player = FullscreenVideoPlayer(
+            root, vlc_instance, logger, config,
+            on_monitor_status_changed=self._on_monitor_status_changed,
+        )
         self._log_queue: "queue.Queue[str]" = queue.Queue()
         # 単一動画のショー(fanfanバースデー等)の再生/停止ボタン。show_id -> ボタン。
         self._stage_buttons: dict[str, tk.Button] = {}
         self._stage_stop_buttons: dict[str, tk.Button] = {}
         # 複数動画のショー(ファッションショー等)のクリップ別選択ボタン。show_id -> ボタン列。
         self._show_clip_buttons: dict[str, list[tk.Button]] = {}
-        self._stage_mode_var = tk.BooleanVar(value=False)
+        # 拡張ディスプレイの表示モード(通常/ショー/ミラーリング)。起動時は
+        # 「通常」(広告等のスライドショー)を既定とする(誤って拡張ディスプレイに
+        # Windowsデスクトップが露出した状態(ミラーリング)で起動しないようにするため、
+        # 前回終了時の状態は引き継がず常にこの既定値から始める)。
+        self._display_mode_var = tk.StringVar(value=FullscreenVideoPlayer.DISPLAY_MODE_NORMAL)
+        self._display_mode_buttons: dict[str, tk.Button] = {}
         # テストモード画面(緊急時の手動再生・音量確認用)。単一インスタンスのみ。
         self._test_mode_window: Optional["TestModeWindow"] = None
 
@@ -155,6 +171,15 @@ class MainWindow:
         if self._link_service.enabled:
             self._poll_link_queue()
             self._update_link_status()
+
+        self._video_player.set_display_mode(self._display_mode_var.get())
+        self._video_player.start_monitor_watch()
+
+        # ショー予定(スケジュール自動再生)の発火ハンドラを登録する。scheduler
+        # (main.pyでMainWindowより先に生成される)側からこのインスタンスの
+        # メソッドを直接参照する構成上、コンストラクタ引数ではなくここで
+        # 代入する(循環依存を避けるため)。
+        self._scheduler.on_stage_show_triggered = self._on_scheduled_stage_show
 
     def _update_title(self) -> None:
         title = "キッザニア館内音響システム"
@@ -173,22 +198,56 @@ class MainWindow:
         self._build_subheader()
 
         top = ttk.Frame(self._root, padding=10)
-        top.pack(fill="x")
+        top.pack(fill="both", expand=True)
 
-        stage_mode_frame = ttk.Frame(top)
-        stage_mode_frame.pack(fill="x", pady=(0, 8))
-        ttk.Checkbutton(
-            stage_mode_frame,
-            text="ステージショーモード(拡張ディスプレイに待機黒画面を表示)",
-            variable=self._stage_mode_var,
-            command=self._on_stage_mode_toggle,
-        ).pack(side="left")
+        display_mode_frame = ttk.Frame(top)
+        display_mode_frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(display_mode_frame, text="拡張ディスプレイの表示:", font=("", 14, "bold")).pack(
+            side="left", padx=(0, 10)
+        )
+        for mode in (
+            FullscreenVideoPlayer.DISPLAY_MODE_NORMAL,
+            FullscreenVideoPlayer.DISPLAY_MODE_SHOW,
+            FullscreenVideoPlayer.DISPLAY_MODE_MIRROR,
+        ):
+            btn = tk.Button(
+                display_mode_frame,
+                text=_DISPLAY_MODE_LABELS[mode],
+                width=12,
+                height=2,
+                font=("", 13, "bold"),
+                command=lambda m=mode: self._on_display_mode_clicked(m),
+            )
+            btn.pack(side="left", padx=(0, 6))
+            self._display_mode_buttons[mode] = btn
+        self._sync_display_mode_buttons()
 
-        ttk.Label(top, text="ステージショー", font=("", 17, "bold")).pack(anchor="w")
+        # ステージショー(左)と次の予定(右)を横並びにする。
+        stage_row = ttk.Frame(top)
+        stage_row.pack(fill="x", pady=5)
 
-        self._stage_button_frame = ttk.Frame(top)
+        stage_col = ttk.Frame(stage_row)
+        stage_col.pack(side="left", fill="both", expand=True, anchor="n")
+        ttk.Label(stage_col, text="ステージショー", font=("", 17, "bold")).pack(anchor="w")
+        self._stage_button_frame = ttk.Frame(stage_col)
         self._stage_button_frame.pack(fill="x", pady=5)
         self._render_stage_buttons(self._stage_button_frame)
+
+        upcoming_col = ttk.Frame(stage_row)
+        upcoming_col.pack(side="left", fill="both", expand=True, anchor="n", padx=(24, 0))
+
+        upcoming_header = ttk.Frame(upcoming_col)
+        upcoming_header.pack(fill="x")
+        ttk.Label(upcoming_header, text="次の予定", font=("", 17, "bold")).pack(side="left")
+        ttk.Button(upcoming_header, text="スケジュール管理...", command=self._open_schedule_manager).pack(
+            side="right"
+        )
+        ttk.Button(upcoming_header, text="一日の予定を表示...", command=self._open_daily_schedule).pack(
+            side="right", padx=(0, 5)
+        )
+
+        self._upcoming_frame = ttk.Frame(upcoming_col)
+        self._upcoming_frame.pack(fill="x", pady=5)
 
         control_frame = ttk.Frame(top)
         control_frame.pack(fill="x", pady=(0, 5))
@@ -199,36 +258,23 @@ class MainWindow:
         self._next_button.pack(side="left")
         self._next_button.state(["disabled"])
 
+        # 現在再生中(そのまま)と、残りの領域いっぱいに動作ログを表示する。
         overview_frame = ttk.Frame(top)
-        overview_frame.pack(fill="x", pady=(5, 0))
+        overview_frame.pack(fill="both", expand=True, pady=(5, 0))
 
-        overview_left = ttk.Frame(overview_frame)
-        overview_left.pack(side="left", fill="both", expand=True)
-
-        ttk.Label(overview_left, text="現在再生中", font=("", 14, "bold")).pack(anchor="w")
-        self._active_frame = ttk.Frame(overview_left)
+        ttk.Label(overview_frame, text="現在再生中", font=("", 14, "bold")).pack(anchor="w")
+        self._active_frame = ttk.Frame(overview_frame)
         self._active_frame.pack(fill="x")
         # job_id -> {frame, name, value_label}。スライダー操作中に行を破棄・再生成
         # してしまわないよう、_render_active_cues()は毎回全消去せず差分更新する。
         self._active_cue_rows: dict[str, dict] = {}
         self._active_empty_label: Optional[tk.Widget] = None
 
-        ttk.Label(overview_left, text="次の予定", font=("", 14, "bold")).pack(anchor="w", pady=(4, 0))
-        self._upcoming_frame = ttk.Frame(overview_left)
-        self._upcoming_frame.pack(fill="x")
+        log_frame = ttk.Frame(overview_frame)
+        log_frame.pack(fill="both", expand=True, pady=(8, 0))
+        ttk.Label(log_frame, text="動作ログ", font=("", 14, "bold")).pack(anchor="w")
 
-        ttk.Button(overview_frame, text="スケジュール管理...", command=self._open_schedule_manager).pack(
-            side="right", anchor="n"
-        )
-        ttk.Button(overview_frame, text="一日の予定を表示...", command=self._open_daily_schedule).pack(
-            side="right", anchor="n", padx=(0, 5)
-        )
-
-        log_frame = ttk.Frame(self._root, padding=(10, 0, 10, 10))
-        log_frame.pack(fill="both", expand=True)
-        ttk.Label(log_frame, text="動作ログ").pack(anchor="w")
-
-        self._log_text = tk.Text(log_frame, height=18, state="disabled", wrap="word", font=("", 12))
+        self._log_text = tk.Text(log_frame, height=10, state="disabled", wrap="word", font=("", 12))
         self._log_text.pack(fill="both", expand=True, side="left")
         scrollbar = ttk.Scrollbar(log_frame, command=self._log_text.yview)
         scrollbar.pack(fill="y", side="right")
@@ -247,6 +293,39 @@ class MainWindow:
             tk.Label(header, image=self._logo_image, bg=_HEADER_COLOR).pack(side="left", padx=24, pady=6)
         else:
             self._logger.warning("ロゴ画像が見つかりません: %s", logo_path)
+
+        self._add_header_icon_button(
+            header, "icon_settings.png", self._open_system_settings, "システム設定"
+        )
+        self._add_header_icon_button(
+            header, "icon_testmode.png", self._open_test_mode, "テストモード"
+        )
+
+    def _add_header_icon_button(
+        self, header: tk.Frame, icon_filename: str, command: Callable[[], None], alt_text: str
+    ) -> None:
+        """ヘッダー(ロゴの隣)に、白枠アイコンのみのボタンを追加する。
+        アイコン画像が読み込めない場合(未生成の環境等)は、代わりに文字ボタンに
+        フォールバックする(機能自体は必ず使えるようにするため)。"""
+        icon_path = _ASSETS_DIR / icon_filename
+        if not icon_path.exists():
+            self._logger.warning("アイコン画像が見つかりません: %s", icon_path)
+            ttk.Button(header, text=alt_text + "...", command=command).pack(side="left", pady=6, padx=(0, 8))
+            return
+
+        # PhotoImageはローカル変数だと参照が切れて消えるため、インスタンス属性として保持する。
+        image = tk.PhotoImage(file=str(icon_path)).subsample(2, 2)
+        setattr(self, f"_{icon_path.stem}_image", image)
+        tk.Button(
+            header,
+            image=image,
+            command=command,
+            bg=_HEADER_COLOR,
+            activebackground=_HEADER_COLOR_ACTIVE,
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+        ).pack(side="left", pady=6, padx=(0, 8))
 
     def _build_subheader(self) -> None:
         subheader = tk.Frame(self._root, bg=_SUBHEADER_COLOR)
@@ -275,6 +354,13 @@ class MainWindow:
         if self._config.device_name:
             self._device_name_label.pack(side="left", padx=(16, 6), pady=10)
 
+        self._monitor_status_var = tk.StringVar(value="モニター: 確認中…")
+        self._monitor_status_label = tk.Label(
+            subheader, textvariable=self._monitor_status_var, font=("", 13, "bold"),
+            bg=_SUBHEADER_COLOR, fg="white",
+        )
+        self._monitor_status_label.pack(side="left", padx=(16, 6), pady=10)
+
         if self._link_service.enabled:
             self._link_status_var = tk.StringVar(value="連携: 未接続")
             tk.Label(
@@ -286,14 +372,6 @@ class MainWindow:
         tk.Label(
             subheader, textvariable=self._clock_var, font=("", 22, "bold"), bg=_SUBHEADER_COLOR, fg="white"
         ).pack(side="right", padx=16)
-
-        ttk.Button(subheader, text="システム設定...", command=self._open_system_settings).pack(
-            side="right", padx=(0, 16), pady=10
-        )
-
-        ttk.Button(subheader, text="テストモード...", command=self._open_test_mode).pack(
-            side="right", padx=(0, 6), pady=10
-        )
 
     def _render_stage_buttons(self, frame: ttk.Frame) -> None:
         for widget in frame.winfo_children():
@@ -326,7 +404,7 @@ class MainWindow:
                     clip_buttons.append(btn)
                 self._show_clip_buttons[show.id] = clip_buttons
                 stop_btn = _make_square_button(
-                    row, "■\n停止", self._on_stop_clicked, bg=_HEADER_COLOR, fg="white"
+                    row, "■\n停止", self._on_show_stop_clicked, bg=_HEADER_COLOR, fg="white"
                 )
                 stop_btn.pack(side="left", padx=(12, 3))
                 self._stage_stop_buttons[show.id] = stop_btn
@@ -336,7 +414,7 @@ class MainWindow:
                 )
                 play_btn.pack(side="left", padx=3)
                 stop_btn = _make_square_button(
-                    row, "■\n停止", self._on_stop_clicked, bg=_HEADER_COLOR, fg="white"
+                    row, "■\n停止", self._on_show_stop_clicked, bg=_HEADER_COLOR, fg="white"
                 )
                 stop_btn.pack(side="left", padx=3)
                 self._stage_buttons[show.id] = play_btn
@@ -352,7 +430,7 @@ class MainWindow:
         playing = self._video_player.is_playing()
         current_id = self._current_show.id if self._current_show is not None else None
         current_index = self._video_player.current_clip_index() if playing else -1
-        stage_mode_on = self._stage_mode_var.get()
+        stage_mode_on = self._display_mode_var.get() == FullscreenVideoPlayer.DISPLAY_MODE_SHOW
 
         for show_id, play_btn in self._stage_buttons.items():
             play_btn.configure(state=("disabled" if (playing or not stage_mode_on) else "normal"))
@@ -502,28 +580,66 @@ class MainWindow:
         self._link_service.notify_async("/event/mode-changed", {"mode": mode})
 
     # ------------------------------------------------------------------
-    # ステージショーモード(拡張ディスプレイの待機黒画面)
+    # 拡張ディスプレイの表示モード(通常/ショー/ミラーリング)
     # ------------------------------------------------------------------
-    def _on_stage_mode_toggle(self) -> None:
-        if self._stage_mode_var.get():
-            self._video_player.enter_standby()
-        else:
-            self._video_player.force_close()
+    def _sync_display_mode_buttons(self) -> None:
+        current = self._display_mode_var.get()
+        for mode, btn in self._display_mode_buttons.items():
+            if mode == current:
+                bg = _HEADER_COLOR if mode == FullscreenVideoPlayer.DISPLAY_MODE_MIRROR else _START_COLOR
+                btn.configure(
+                    bg=bg, fg="white", activebackground=bg, activeforeground="white", relief="sunken",
+                )
+            else:
+                btn.configure(
+                    bg="SystemButtonFace", fg="black",
+                    activebackground="SystemButtonFace", activeforeground="black", relief="raised",
+                )
+
+    def _on_display_mode_clicked(self, mode: str) -> None:
+        if mode == self._display_mode_var.get():
+            return
+        if mode == FullscreenVideoPlayer.DISPLAY_MODE_MIRROR:
+            if not messagebox.askyesno(
+                "ミラーリングに切り替えますか?",
+                "PC画面が出力されます。よろしいですか?",
+            ):
+                return
+
+        self._display_mode_var.set(mode)
+        self._video_player.set_display_mode(mode)
+        if mode != FullscreenVideoPlayer.DISPLAY_MODE_SHOW:
             self._next_button.state(["disabled"])
+        self._sync_display_mode_buttons()
         self._sync_stage_ui()
+
+    def _on_monitor_status_changed(self, connected: bool) -> None:
+        self._monitor_status_var.set("モニター: 接続中" if connected else "モニター: 未接続")
+        self._monitor_status_label.configure(fg=("white" if connected else "#ffe066"))
 
     # ------------------------------------------------------------------
     # ステージショー再生
     # ------------------------------------------------------------------
     def _start_stage_show(self, show: StageShow, start_index: int = 0) -> None:
-        if not self._stage_mode_var.get():
-            messagebox.showwarning("ステージショーモードOFF", "先に「ステージショーモード」をONにしてください。")
+        if self._display_mode_var.get() != FullscreenVideoPlayer.DISPLAY_MODE_SHOW:
+            messagebox.showwarning(
+                "表示モードが「ショー」ではありません", "先に拡張ディスプレイの表示を「ショー」に切り替えてください。"
+            )
             return
 
         if self._video_player.is_playing():
             messagebox.showwarning("再生中", "別のショーを再生中です。終了までお待ちください。")
             return
 
+        self._launch_stage_show(show, start_index)
+
+    def _launch_stage_show(self, show: StageShow, start_index: int = 0, auto_revert_after: bool = False) -> None:
+        """ステージショーの再生を実際に開始する(表示モード/再生中チェックは
+        呼び出し側の責務)。手動再生(_start_stage_show)とスケジュール自動再生
+        (_handle_scheduled_stage_show)の両方から共通で使う。auto_revert_afterが
+        Trueの場合、再生終了時に表示モードがまだ「ショー」のままなら自動的に
+        「通常」へ戻す(スケジュール発火時のみ。手動再生では従来通り、
+        終了後も「ショー」の待機画面のままにする)。"""
         files = [self._config.resolve_media(c.file) for c in show.clips]
 
         def _on_finished() -> None:
@@ -531,6 +647,13 @@ class MainWindow:
             self._sync_stage_ui()
             self._next_button.state(["disabled"])
             self._link_service.notify_async("/event/playback-ended", {"label": show.label})
+            if auto_revert_after and self._display_mode_var.get() == FullscreenVideoPlayer.DISPLAY_MODE_SHOW:
+                self._logger.info(
+                    "スケジュールされたショーの再生が終了したため、表示を「通常」に戻します: %s", show.label
+                )
+                self._display_mode_var.set(FullscreenVideoPlayer.DISPLAY_MODE_NORMAL)
+                self._video_player.set_display_mode(FullscreenVideoPlayer.DISPLAY_MODE_NORMAL)
+                self._sync_display_mode_buttons()
 
         self._current_show = show
         self._video_player.play(
@@ -542,6 +665,48 @@ class MainWindow:
         if show.clips and 0 <= start_index < len(show.clips):
             self._lighting.trigger_cue(show.clips[start_index].lighting_cue)
         self._link_service.notify_async("/event/playback-started", {"label": show.label})
+
+    # ------------------------------------------------------------------
+    # ショー予定(スケジュール自動再生)
+    # ------------------------------------------------------------------
+    def _on_scheduled_stage_show(self, stage_show_id: str, clip_index: int, show_label: str) -> None:
+        """JobScheduler(APSchedulerのバックグラウンドスレッド)から呼ばれる。
+        Tkinterウィジェットの操作はメインスレッドでのみ行えるため(スレッド
+        セーフではない)、root.after()でメインスレッドの処理へ委譲する。"""
+        self._root.after(0, lambda: self._handle_scheduled_stage_show(stage_show_id, clip_index, show_label))
+
+    def _handle_scheduled_stage_show(self, stage_show_id: str, clip_index: int, show_label: str) -> None:
+        """スケジュールされたショーの発火を実際に処理する(Tkinterメインスレッド上)。
+        無人で発火するため、messageboxのようなモーダルダイアログは一切使わず、
+        再生できない場合はログに記録してスキップするだけにとどめる
+        (ダイアログを出すとスタッフが気づくまでアプリ全体が固まってしまうため)。"""
+        show = next((s for s in self._config.load_stage_shows() if s.id == stage_show_id), None)
+        if show is None:
+            self._logger.error("スケジュールされたショーの参照先が見つかりません: %s", stage_show_id)
+            return
+
+        if self._video_player.is_playing():
+            self._logger.warning(
+                "既に別の動画を再生中のため、スケジュールされたショーの再生をスキップしました: %s", show.label
+            )
+            return
+
+        current_mode = self._display_mode_var.get()
+        if current_mode == FullscreenVideoPlayer.DISPLAY_MODE_MIRROR:
+            self._logger.warning(
+                "ミラーリング中のため、スケジュールされたショーの再生をスキップしました: %s", show.label
+            )
+            return
+
+        if current_mode != FullscreenVideoPlayer.DISPLAY_MODE_SHOW:
+            self._logger.info("スケジュールにより表示モードを「ショー」に自動切替します: %s", show.label)
+            self._display_mode_var.set(FullscreenVideoPlayer.DISPLAY_MODE_SHOW)
+            self._video_player.set_display_mode(FullscreenVideoPlayer.DISPLAY_MODE_SHOW)
+            self._sync_display_mode_buttons()
+
+        start_index = clip_index if show.clips and 0 <= clip_index < len(show.clips) else 0
+        self._logger.info("スケジュールによりショーを自動再生します: %s", show.label)
+        self._launch_stage_show(show, start_index=start_index, auto_revert_after=True)
 
     def _select_stage_clip(self, show: StageShow, index: int) -> None:
         """ファッションショーのクリップ別ボタン等から、特定の動画を直接再生する。
@@ -556,11 +721,18 @@ class MainWindow:
         self._start_stage_show(show, start_index=index)
 
     def _on_stop_clicked(self) -> None:
-        """■ すべて停止(緊急)。再生中の動画があれば停止するが、待機黒画面・
-        ステージショーモードは解除しない(解除すると拡張ディスプレイ経由で
-        ゲスト側モニターにWindowsのデスクトップが露出してしまうため)。"""
+        """■ すべて停止(緊急)。再生中の動画があれば即座に(フェードなしで)
+        停止するが、待機画面・表示モード(通常/ショー)は解除しない
+        (ミラーリングに切り替わってしまうと拡張ディスプレイ経由でゲスト側
+        モニターにWindowsのデスクトップが露出してしまうため)。"""
         self._video_player.stop_playback()
         self._link_service.notify_async("/event/stop-all", {})
+
+    def _on_show_stop_clicked(self) -> None:
+        """ショーごとの「■ 停止」ボタン。緊急停止とは異なり、フェードアウト
+        しながら再生を止める(待機画面・表示モードはstop_playback()と同様に
+        解除しない)。"""
+        self._video_player.fade_out_and_stop()
 
     def _on_next_clip_clicked(self) -> None:
         index = self._video_player.next_clip()
@@ -948,6 +1120,191 @@ class TestModeWindow(tk.Toplevel):
         self.destroy()
 
 
+class CronScheduleFields(ttk.Frame):
+    """「毎日◯時◯分」「毎時◯分」「時間帯」の頻度・時刻設定UI(cron/window
+    辞書の生成・復元)をまとめた部品。JobRow(音源スケジュール)と
+    StageShowScheduleRow(ショー予定)の両方から共通で使う。内部はgridで
+    配置し、頻度切替時はgrid_remove()/grid()で表示・非表示する
+    (pack_forget()だと再表示時に他ウィジェットとの左右順序が崩れるため)。"""
+
+    def __init__(self, parent: tk.Widget, default_cron: dict, default_window: Optional[dict]):
+        super().__init__(parent)
+
+        freq_default = self._detect_freq(default_cron, default_window)
+        start_hour, start_minute, end_hour, end_minute, trigger_minute = self._detect_schedule_values(
+            default_cron, default_window, freq_default
+        )
+
+        col = 0
+        self.freq_var = tk.StringVar(value=freq_default)
+        freq_combo = ttk.Combobox(
+            self, textvariable=self.freq_var, values=["毎日", "毎時", "時間帯"],
+            width=5, state="readonly",
+        )
+        freq_combo.grid(row=0, column=col, padx=2)
+        col += 1
+
+        self.hour_var = tk.StringVar(value=str(start_hour))
+        self.hour_spin = ttk.Spinbox(self, from_=0, to=23, textvariable=self.hour_var, width=3)
+        self.hour_spin.grid(row=0, column=col, padx=(2, 0))
+        col += 1
+        ttk.Label(self, text="時").grid(row=0, column=col)
+        col += 1
+
+        self._start_colon_label = ttk.Label(self, text=":")
+        self._start_colon_label.grid(row=0, column=col)
+        col += 1
+        self.start_minute_var = tk.StringVar(value=str(start_minute))
+        self.start_minute_spin = ttk.Spinbox(self, from_=0, to=59, textvariable=self.start_minute_var, width=3)
+        self.start_minute_spin.grid(row=0, column=col, padx=(0, 2))
+        col += 1
+
+        self._range_label = ttk.Label(self, text="〜")
+        self._range_label.grid(row=0, column=col)
+        col += 1
+
+        self.end_hour_var = tk.StringVar(value=str(end_hour))
+        self.end_hour_spin = ttk.Spinbox(self, from_=0, to=23, textvariable=self.end_hour_var, width=3)
+        self.end_hour_spin.grid(row=0, column=col, padx=(2, 0))
+        col += 1
+        self._range_end_label = ttk.Label(self, text="時")
+        self._range_end_label.grid(row=0, column=col)
+        col += 1
+
+        self._end_colon_label = ttk.Label(self, text=":")
+        self._end_colon_label.grid(row=0, column=col)
+        col += 1
+        self.end_minute_var = tk.StringVar(value=str(end_minute))
+        self.end_minute_spin = ttk.Spinbox(self, from_=0, to=59, textvariable=self.end_minute_var, width=3)
+        self.end_minute_spin.grid(row=0, column=col, padx=(0, 2))
+        col += 1
+
+        self._hourly_prefix_label = ttk.Label(self, text="毎時")
+        self._hourly_prefix_label.grid(row=0, column=col)
+        col += 1
+
+        self.minute_var = tk.StringVar(value=str(trigger_minute))
+        minute_spin = ttk.Spinbox(self, from_=0, to=59, textvariable=self.minute_var, width=3)
+        minute_spin.grid(row=0, column=col, padx=(2, 0))
+        col += 1
+        ttk.Label(self, text="分").grid(row=0, column=col)
+        col += 1
+
+        def _update_freq_state(*_a) -> None:
+            freq = self.freq_var.get()
+            if freq == "時間帯":
+                self.hour_spin.state(["!disabled"])
+                self.end_hour_spin.state(["!disabled"])
+                self.start_minute_spin.state(["!disabled"])
+                self.end_minute_spin.state(["!disabled"])
+                self._start_colon_label.grid()
+                self._end_colon_label.grid()
+                self.start_minute_spin.grid()
+                self._range_label.grid()
+                self._range_end_label.grid()
+                self.end_hour_spin.grid()
+                self.end_minute_spin.grid()
+                self._hourly_prefix_label.grid()
+            else:
+                self.end_hour_spin.state(["disabled"])
+                self._start_colon_label.grid_remove()
+                self._end_colon_label.grid_remove()
+                self.start_minute_spin.grid_remove()
+                self._range_label.grid_remove()
+                self._range_end_label.grid_remove()
+                self.end_hour_spin.grid_remove()
+                self.end_minute_spin.grid_remove()
+                self._hourly_prefix_label.grid_remove()
+                if freq == "毎時":
+                    self.hour_spin.state(["disabled"])
+                else:
+                    self.hour_spin.state(["!disabled"])
+
+        self.freq_var.trace_add("write", _update_freq_state)
+        _update_freq_state()
+
+    @staticmethod
+    def _detect_freq(cron: dict, window: Optional[dict]) -> str:
+        if window is not None:
+            return "時間帯"
+        hour_raw = cron.get("hour")
+        if isinstance(hour_raw, str) and "-" in hour_raw:
+            # 旧仕様(時間範囲cron文字列、分単位の境界指定はできなかった)からの後方互換。
+            return "時間帯"
+        if "hour" in cron:
+            return "毎日"
+        return "毎時"
+
+    @staticmethod
+    def _detect_schedule_values(
+        cron: dict, window: Optional[dict], freq: str
+    ) -> tuple[int, int, int, int, int]:
+        """(開始時, 開始分, 終了時, 終了分, 毎時トリガー分)を、cron/window辞書から復元する。"""
+        minute_val = cron.get("minute", 0)
+        # 旧仕様(間隔指定 "*/N")で保存された古いデータを開いた場合の後方互換。
+        minute_s = str(minute_val)
+        minute_s = minute_s.split("/", 1)[1] if "/" in minute_s else minute_s
+        trigger_minute = CronScheduleFields._safe_int(minute_s, 0, 59, 0)
+
+        if freq == "時間帯":
+            if window is not None:
+                start_hour = CronScheduleFields._safe_int(str(window.get("start_hour", 10)), 0, 23, 10)
+                start_minute = CronScheduleFields._safe_int(str(window.get("start_minute", 0)), 0, 59, 0)
+                end_hour = CronScheduleFields._safe_int(str(window.get("end_hour", 18)), 0, 23, 18)
+                end_minute = CronScheduleFields._safe_int(str(window.get("end_minute", 0)), 0, 59, 0)
+            else:
+                # 旧仕様(cron.hourが"H1-H2"の範囲文字列、分の境界は常に0扱い)。
+                hour_raw = str(cron.get("hour", "10-18"))
+                start_s, _, end_s = hour_raw.partition("-")
+                start_hour = CronScheduleFields._safe_int(start_s, 0, 23, 10)
+                start_minute = 0
+                end_hour = CronScheduleFields._safe_int(end_s, 0, 23, 18)
+                end_minute = 0
+            return start_hour, start_minute, end_hour, end_minute, trigger_minute
+
+        hour_val = cron.get("hour", 9)
+        hour = CronScheduleFields._safe_int(str(hour_val), 0, 23, 9)
+        return hour, 0, 18, 0, trigger_minute
+
+    @staticmethod
+    def _safe_int(value: str, lo: int, hi: int, default: int) -> int:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, n))
+
+    def get_cron_and_window(self, label_for_errors: str) -> tuple[dict, Optional[dict]]:
+        """現在のUI入力からcron/window辞書を組み立てる。「時間帯」で開始≧終了の
+        場合はValueErrorを送出する(呼び出し側でエラーメッセージとして表示する)。"""
+        freq = self.freq_var.get()
+        if freq == "時間帯":
+            start_hour = self._safe_int(self.hour_var.get(), 0, 23, 10)
+            start_minute = self._safe_int(self.start_minute_var.get(), 0, 59, 0)
+            end_hour = self._safe_int(self.end_hour_var.get(), 0, 23, 18)
+            end_minute = self._safe_int(self.end_minute_var.get(), 0, 59, 0)
+            trigger_minute = self._safe_int(self.minute_var.get(), 0, 59, 0)
+            if (start_hour, start_minute) >= (end_hour, end_minute):
+                raise ValueError(
+                    f"「{label_for_errors}」の時間帯設定が不正です"
+                    "(開始時刻は終了時刻より前にしてください。日をまたぐ場合は2行に分けて登録してください)"
+                )
+            cron = {"minute": trigger_minute}
+            window = {
+                "start_hour": start_hour,
+                "start_minute": start_minute,
+                "end_hour": end_hour,
+                "end_minute": end_minute,
+            }
+            return cron, window
+
+        hour = self._safe_int(self.hour_var.get(), 0, 23, 9)
+        minute = self._safe_int(self.minute_var.get(), 0, 59, 0)
+        if freq == "毎時":
+            return {"minute": minute}, None
+        return {"hour": hour, "minute": minute}, None
+
+
 class JobRow:
     """スケジュール管理画面(共通/モード別/手動追加)の1行
     (名前・時刻・ファイル・音量・有効/削除)。"""
@@ -1003,102 +1360,11 @@ class JobRow:
         ttk.Entry(self.frame, textvariable=self.name_var, width=18).grid(row=0, column=col, padx=2)
         col += 1
 
+        self.schedule_fields: Optional[CronScheduleFields] = None
         if include_schedule:
-            freq_default = self._detect_freq(default_cron, default_window)
-            start_hour, start_minute, end_hour, end_minute, trigger_minute = self._detect_schedule_values(
-                default_cron, default_window, freq_default
-            )
-
-            self.freq_var = tk.StringVar(value=freq_default)
-            freq_combo = ttk.Combobox(
-                self.frame, textvariable=self.freq_var, values=["毎日", "毎時", "時間帯"],
-                width=5, state="readonly",
-            )
-            freq_combo.grid(row=0, column=col, padx=2)
+            self.schedule_fields = CronScheduleFields(self.frame, default_cron, default_window)
+            self.schedule_fields.grid(row=0, column=col, padx=2)
             col += 1
-
-            self.hour_var = tk.StringVar(value=str(start_hour))
-            self.hour_spin = ttk.Spinbox(self.frame, from_=0, to=23, textvariable=self.hour_var, width=3)
-            self.hour_spin.grid(row=0, column=col, padx=(2, 0))
-            col += 1
-            ttk.Label(self.frame, text="時").grid(row=0, column=col)
-            col += 1
-
-            self._start_colon_label = ttk.Label(self.frame, text=":")
-            self._start_colon_label.grid(row=0, column=col)
-            col += 1
-            self.start_minute_var = tk.StringVar(value=str(start_minute))
-            self.start_minute_spin = ttk.Spinbox(
-                self.frame, from_=0, to=59, textvariable=self.start_minute_var, width=3
-            )
-            self.start_minute_spin.grid(row=0, column=col, padx=(0, 2))
-            col += 1
-
-            self._range_label = ttk.Label(self.frame, text="〜")
-            self._range_label.grid(row=0, column=col)
-            col += 1
-
-            self.end_hour_var = tk.StringVar(value=str(end_hour))
-            self.end_hour_spin = ttk.Spinbox(self.frame, from_=0, to=23, textvariable=self.end_hour_var, width=3)
-            self.end_hour_spin.grid(row=0, column=col, padx=(2, 0))
-            col += 1
-            self._range_end_label = ttk.Label(self.frame, text="時")
-            self._range_end_label.grid(row=0, column=col)
-            col += 1
-
-            self._end_colon_label = ttk.Label(self.frame, text=":")
-            self._end_colon_label.grid(row=0, column=col)
-            col += 1
-            self.end_minute_var = tk.StringVar(value=str(end_minute))
-            self.end_minute_spin = ttk.Spinbox(
-                self.frame, from_=0, to=59, textvariable=self.end_minute_var, width=3
-            )
-            self.end_minute_spin.grid(row=0, column=col, padx=(0, 2))
-            col += 1
-
-            self._hourly_prefix_label = ttk.Label(self.frame, text="毎時")
-            self._hourly_prefix_label.grid(row=0, column=col)
-            col += 1
-
-            self.minute_var = tk.StringVar(value=str(trigger_minute))
-            minute_spin = ttk.Spinbox(self.frame, from_=0, to=59, textvariable=self.minute_var, width=3)
-            minute_spin.grid(row=0, column=col, padx=(2, 0))
-            col += 1
-            ttk.Label(self.frame, text="分").grid(row=0, column=col)
-            col += 1
-
-            def _update_freq_state(*_a) -> None:
-                freq = self.freq_var.get()
-                if freq == "時間帯":
-                    self.hour_spin.state(["!disabled"])
-                    self.end_hour_spin.state(["!disabled"])
-                    self.start_minute_spin.state(["!disabled"])
-                    self.end_minute_spin.state(["!disabled"])
-                    self._start_colon_label.grid()
-                    self._end_colon_label.grid()
-                    self.start_minute_spin.grid()
-                    self._range_label.grid()
-                    self._range_end_label.grid()
-                    self.end_hour_spin.grid()
-                    self.end_minute_spin.grid()
-                    self._hourly_prefix_label.grid()
-                else:
-                    self.end_hour_spin.state(["disabled"])
-                    self._start_colon_label.grid_remove()
-                    self._end_colon_label.grid_remove()
-                    self.start_minute_spin.grid_remove()
-                    self._range_label.grid_remove()
-                    self._range_end_label.grid_remove()
-                    self.end_hour_spin.grid_remove()
-                    self.end_minute_spin.grid_remove()
-                    self._hourly_prefix_label.grid_remove()
-                    if freq == "毎時":
-                        self.hour_spin.state(["disabled"])
-                    else:
-                        self.hour_spin.state(["!disabled"])
-
-            self.freq_var.trace_add("write", _update_freq_state)
-            _update_freq_state()
 
         self.file_value = default_file
         self.file_display_var = tk.StringVar(value=self._basename(default_file))
@@ -1149,49 +1415,6 @@ class JobRow:
         ttk.Button(self.frame, text="削除", command=self._remove).grid(row=0, column=col, padx=2)
 
     @staticmethod
-    def _detect_freq(cron: dict, window: Optional[dict]) -> str:
-        if window is not None:
-            return "時間帯"
-        hour_raw = cron.get("hour")
-        if isinstance(hour_raw, str) and "-" in hour_raw:
-            # 旧仕様(時間範囲cron文字列、分単位の境界指定はできなかった)からの後方互換。
-            return "時間帯"
-        if "hour" in cron:
-            return "毎日"
-        return "毎時"
-
-    @staticmethod
-    def _detect_schedule_values(
-        cron: dict, window: Optional[dict], freq: str
-    ) -> tuple[int, int, int, int, int]:
-        """(開始時, 開始分, 終了時, 終了分, 毎時トリガー分)を、cron/window辞書から復元する。"""
-        minute_val = cron.get("minute", 0)
-        # 旧仕様(間隔指定 "*/N")で保存された古いデータを開いた場合の後方互換。
-        minute_s = str(minute_val)
-        minute_s = minute_s.split("/", 1)[1] if "/" in minute_s else minute_s
-        trigger_minute = JobRow._safe_int(minute_s, 0, 59, 0)
-
-        if freq == "時間帯":
-            if window is not None:
-                start_hour = JobRow._safe_int(str(window.get("start_hour", 10)), 0, 23, 10)
-                start_minute = JobRow._safe_int(str(window.get("start_minute", 0)), 0, 59, 0)
-                end_hour = JobRow._safe_int(str(window.get("end_hour", 18)), 0, 23, 18)
-                end_minute = JobRow._safe_int(str(window.get("end_minute", 0)), 0, 59, 0)
-            else:
-                # 旧仕様(cron.hourが"H1-H2"の範囲文字列、分の境界は常に0扱い)。
-                hour_raw = str(cron.get("hour", "10-18"))
-                start_s, _, end_s = hour_raw.partition("-")
-                start_hour = JobRow._safe_int(start_s, 0, 23, 10)
-                start_minute = 0
-                end_hour = JobRow._safe_int(end_s, 0, 23, 18)
-                end_minute = 0
-            return start_hour, start_minute, end_hour, end_minute, trigger_minute
-
-        hour_val = cron.get("hour", 9)
-        hour = JobRow._safe_int(str(hour_val), 0, 23, 9)
-        return hour, 0, 18, 0, trigger_minute
-
-    @staticmethod
     def _basename(value: str) -> str:
         return Path(value).name if value else "(未選択)"
 
@@ -1210,45 +1433,11 @@ class JobRow:
         self.frame.destroy()
         self.removed = True
 
-    @staticmethod
-    def _safe_int(value: str, lo: int, hi: int, default: int) -> int:
-        try:
-            n = int(value)
-        except (TypeError, ValueError):
-            return default
-        return max(lo, min(hi, n))
-
     def to_scheduled_job(self) -> ScheduledJob:
-        window: Optional[dict] = None
-        if self.include_schedule:
-            freq = self.freq_var.get()
-            if freq == "時間帯":
-                start_hour = self._safe_int(self.hour_var.get(), 0, 23, 10)
-                start_minute = self._safe_int(self.start_minute_var.get(), 0, 59, 0)
-                end_hour = self._safe_int(self.end_hour_var.get(), 0, 23, 18)
-                end_minute = self._safe_int(self.end_minute_var.get(), 0, 59, 0)
-                trigger_minute = self._safe_int(self.minute_var.get(), 0, 59, 0)
-                if (start_hour, start_minute) >= (end_hour, end_minute):
-                    raise ValueError(
-                        f"「{self.name_var.get() or self.job_id}」の時間帯設定が不正です"
-                        "(開始時刻は終了時刻より前にしてください。日をまたぐ場合は2行に分けて登録してください)"
-                    )
-                cron = {"minute": trigger_minute}
-                window = {
-                    "start_hour": start_hour,
-                    "start_minute": start_minute,
-                    "end_hour": end_hour,
-                    "end_minute": end_minute,
-                }
-            else:
-                hour = self._safe_int(self.hour_var.get(), 0, 23, 9)
-                minute = self._safe_int(self.minute_var.get(), 0, 59, 0)
-                if freq == "毎時":
-                    cron = {"minute": minute}
-                else:
-                    cron = {"hour": hour, "minute": minute}
+        if self.schedule_fields is not None:
+            cron, window = self.schedule_fields.get_cron_and_window(self.name_var.get() or self.job_id)
         else:
-            cron = {}
+            cron, window = {}, None
         enabled = self.enabled_var.get() if self.enabled_var is not None else True
         return ScheduledJob(
             id=self.job_id,
@@ -1641,6 +1830,174 @@ class BlackoutWindowListEditor(ttk.Frame):
         return [r.to_blackout_window() for r in self.rows if not r.removed]
 
 
+class StageShowScheduleRow:
+    """スケジュール管理画面「ショー予定」タブの1行。指定した時刻に、拡張
+    ディスプレイの表示モードを自動的に「ショー」へ切り替えたうえで、選択した
+    ステージショーを自動再生する(既に別の動画を再生中・ミラーリング中は
+    自動再生をスキップしてログに記録するだけにとどめる。詳細はgui.pyの
+    MainWindow._handle_scheduled_stage_show参照)。"""
+
+    def __init__(
+        self,
+        parent: ttk.Frame,
+        shows: list[StageShow],
+        job: Optional[StageShowJob] = None,
+        mode_names: Optional[list[str]] = None,
+    ):
+        self.removed = False
+        self.job_id = job.id if job is not None else f"stageschedule_{uuid.uuid4().hex[:8]}"
+        self._shows = shows
+        self._show_label_to_id = {s.label: s.id for s in shows}
+        self._show_id_to_label = {s.id: s.label for s in shows}
+
+        default_show_id = job.stage_show_id if job is not None else (shows[0].id if shows else "")
+        default_clip_index = job.clip_index if job is not None else 0
+        default_cron: dict = job.cron if job is not None else {}
+        default_window = job.window if job is not None else None
+        default_enabled = job.enabled if job is not None else True
+        default_mode = job.mode if job is not None else ""
+
+        self.frame = ttk.Frame(parent, relief="groove", padding=4)
+        self.frame.pack(fill="x", pady=2)
+
+        col = 0
+        show_values = list(self._show_label_to_id.keys())
+        default_show_label = self._show_id_to_label.get(default_show_id, (show_values[0] if show_values else ""))
+        self.show_var = tk.StringVar(value=default_show_label)
+        ttk.Combobox(
+            self.frame, textvariable=self.show_var, values=show_values, width=16, state="readonly",
+        ).grid(row=0, column=col, padx=2)
+        col += 1
+
+        self.clip_var = tk.StringVar()
+        self.clip_combo = ttk.Combobox(self.frame, textvariable=self.clip_var, width=18, state="readonly")
+        self.clip_combo.grid(row=0, column=col, padx=2)
+        col += 1
+
+        def _refresh_clip_options(initial_index: int = 0) -> None:
+            show = next((s for s in self._shows if s.label == self.show_var.get()), None)
+            if show is None or len(show.clips) <= 1:
+                self.clip_combo.configure(values=["(先頭から)"], state="disabled")
+                self.clip_var.set("(先頭から)")
+                return
+            labels = [f"{i + 1}: {Path(c.file).stem}" for i, c in enumerate(show.clips)]
+            self.clip_combo.configure(values=labels, state="readonly")
+            idx = initial_index if 0 <= initial_index < len(labels) else 0
+            self.clip_var.set(labels[idx])
+
+        self.show_var.trace_add("write", lambda *_a: _refresh_clip_options())
+        _refresh_clip_options(initial_index=default_clip_index)
+
+        self.schedule_fields = CronScheduleFields(self.frame, default_cron, default_window)
+        self.schedule_fields.grid(row=0, column=col, padx=2)
+        col += 1
+
+        mode_values = [_BLACKOUT_MODE_COMMON] + list(mode_names or [])
+        default_mode_label = default_mode if default_mode else _BLACKOUT_MODE_COMMON
+        self.mode_var = tk.StringVar(
+            value=default_mode_label if default_mode_label in mode_values else _BLACKOUT_MODE_COMMON
+        )
+        ttk.Combobox(
+            self.frame, textvariable=self.mode_var, values=mode_values, width=12, state="readonly",
+        ).grid(row=0, column=col, padx=4)
+        col += 1
+
+        self.enabled_var = tk.BooleanVar(value=default_enabled)
+        ttk.Checkbutton(self.frame, text="有効", variable=self.enabled_var).grid(row=0, column=col, padx=4)
+        col += 1
+
+        ttk.Button(self.frame, text="削除", command=self._remove).grid(row=0, column=col, padx=2)
+
+    def _remove(self) -> None:
+        self.frame.destroy()
+        self.removed = True
+
+    def to_stage_show_job(self) -> Optional[StageShowJob]:
+        """選択中のショーが存在しない場合(ショーが1つも登録されていない場合)は
+        Noneを返す(呼び出し側で除外する)。"""
+        show_id = self._show_label_to_id.get(self.show_var.get())
+        if show_id is None:
+            return None
+        cron, window = self.schedule_fields.get_cron_and_window(self.show_var.get())
+
+        show = next((s for s in self._shows if s.id == show_id), None)
+        clip_index = 0
+        if show is not None and len(show.clips) > 1:
+            try:
+                clip_index = int(self.clip_var.get().split(":", 1)[0]) - 1
+            except (ValueError, IndexError):
+                clip_index = 0
+
+        mode = self.mode_var.get()
+        return StageShowJob(
+            id=self.job_id,
+            stage_show_id=show_id,
+            cron=cron,
+            enabled=self.enabled_var.get(),
+            clip_index=max(0, clip_index),
+            mode=("" if mode == _BLACKOUT_MODE_COMMON else mode),
+            window=window,
+        )
+
+
+class StageShowScheduleListEditor(ttk.Frame):
+    """「ショー予定」タブの中身。ステージショーを時刻指定で自動再生するための
+    予定一覧を編集する(ショー自体の定義は「ステージショー」タブで行う)。"""
+
+    def __init__(
+        self,
+        parent: ttk.Frame,
+        shows: list[StageShow],
+        jobs: list[StageShowJob],
+        mode_names: Optional[list[str]] = None,
+    ):
+        super().__init__(parent)
+        self._shows = shows
+        self._mode_names = mode_names or []
+
+        if not shows:
+            ttk.Label(
+                self, text="先に「ステージショー」タブでショーを登録してください。",
+                foreground="#888888",
+            ).pack(anchor="w", padx=5, pady=10)
+
+        canvas = tk.Canvas(self, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        self._rows_frame = ttk.Frame(canvas)
+        self._rows_frame.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self._rows_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.rows: list[StageShowScheduleRow] = []
+        for job in jobs:
+            self._add_row(job)
+
+        ttk.Button(self, text="+ ショー予定を追加", command=lambda: self._add_row(None)).pack(
+            anchor="w", padx=5, pady=5
+        )
+
+    def _add_row(self, job: Optional[StageShowJob]) -> None:
+        if not self._shows:
+            messagebox.showwarning(
+                "ショーが登録されていません", "先に「ステージショー」タブでショーを登録してください。"
+            )
+            return
+        row = StageShowScheduleRow(self._rows_frame, self._shows, job, mode_names=self._mode_names)
+        self.rows.append(row)
+
+    def get_stage_show_jobs(self) -> list[StageShowJob]:
+        jobs = []
+        for r in self.rows:
+            if r.removed:
+                continue
+            job = r.to_stage_show_job()
+            if job is not None:
+                jobs.append(job)
+        return jobs
+
+
 class LightingCueRow:
     """スケジュール管理画面「照明キュー」タブの1行。照明卓(Zero 88 FLX S24)の
     プレイバック番号をまとめて呼び出すための名前付きキューを定義する。
@@ -1765,6 +2122,14 @@ class ScheduleManagerWindow(tk.Toplevel):
         )
         self._shows_editor.pack(fill="both", expand=True)
 
+        stage_schedule_tab = ttk.Frame(notebook)
+        notebook.add(stage_schedule_tab, text="ショー予定")
+        self._stage_schedule_editor = StageShowScheduleListEditor(
+            stage_schedule_tab, config.load_stage_shows(), config.load_stage_show_schedule(),
+            mode_names=config.get_mode_names(),
+        )
+        self._stage_schedule_editor.pack(fill="both", expand=True)
+
         blackout_tab = ttk.Frame(notebook)
         notebook.add(blackout_tab, text="休止時間帯")
         self._blackout_editor = BlackoutWindowListEditor(
@@ -1787,6 +2152,7 @@ class ScheduleManagerWindow(tk.Toplevel):
             common_jobs = self._common_editor.get_jobs()
             mode_jobs = {mode: editor.get_jobs() for mode, editor in self._mode_editors.items()}
             manual_jobs = self._manual_editor.get_jobs()
+            stage_show_jobs = self._stage_schedule_editor.get_stage_show_jobs()
         except ValueError as e:
             messagebox.showerror("入力エラー", str(e))
             return
@@ -1797,6 +2163,7 @@ class ScheduleManagerWindow(tk.Toplevel):
             self._config.save_mode_jobs(mode, jobs)
         self._config.save_manual_jobs(manual_jobs)
         self._config.save_stage_shows(self._shows_editor.get_stage_shows())
+        self._config.save_stage_show_schedule(stage_show_jobs)
         self._config.save_blackout_windows(self._blackout_editor.get_blackout_windows())
 
         self._on_saved()
@@ -1872,6 +2239,9 @@ class DailyScheduleWindow(tk.Toplevel):
             if entry.kind == "blackout":
                 text = f"{format_time_range(entry.start, entry.end)}  【休止時間帯】{entry.label}"
                 ttk.Label(row, text=text, foreground="#b02a2a").pack(anchor="w")
+            elif entry.kind == "show":
+                text = f"{entry.start:%H:%M}    【ショー】{entry.label}"
+                ttk.Label(row, text=text, font=("", 11, "bold"), foreground="#1565c0").pack(anchor="w")
             else:
                 text = f"{entry.start:%H:%M}    {entry.label}"
                 ttk.Label(row, text=text, font=("", 11)).pack(anchor="w")
@@ -1913,6 +2283,7 @@ class SystemSettingsWindow(tk.Toplevel):
         self._config = config
         self._on_saved = on_saved
         self._background_image_value = config.standby_background_image
+        self._slideshow_folder_value = config.slideshow_folder
         link = config.link
 
         form = ttk.Frame(self, padding=16)
@@ -1987,7 +2358,7 @@ class SystemSettingsWindow(tk.Toplevel):
         ttk.Separator(form, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
         row += 1
 
-        ttk.Label(form, text="ステージショー待機画面の背景", font=("", 13, "bold")).grid(
+        ttk.Label(form, text="「ショー」表示の待機画面の背景", font=("", 13, "bold")).grid(
             row=row, column=0, columnspan=2, sticky="w"
         )
         row += 1
@@ -2004,6 +2375,40 @@ class SystemSettingsWindow(tk.Toplevel):
         ttk.Button(bg_btn_row, text="画像を選択...", command=self._browse_background_image).pack(side="left")
         ttk.Button(bg_btn_row, text="黒背景に戻す", command=self._clear_background_image).pack(
             side="left", padx=(6, 0)
+        )
+        row += 1
+
+        ttk.Separator(form, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
+        row += 1
+
+        ttk.Label(form, text="「通常」表示のスライドショー", font=("", 13, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w"
+        )
+        row += 1
+
+        ttk.Label(form, text="現在の設定:").grid(row=row, column=0, sticky="w", pady=4)
+        self.slideshow_display_var = tk.StringVar(
+            value=self._slideshow_label_text(self._slideshow_folder_value)
+        )
+        ttk.Label(form, textvariable=self.slideshow_display_var, anchor="w").grid(
+            row=row, column=1, sticky="w", pady=4
+        )
+        row += 1
+
+        slideshow_btn_row = ttk.Frame(form)
+        slideshow_btn_row.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Button(slideshow_btn_row, text="フォルダーを選択...", command=self._browse_slideshow_folder).pack(
+            side="left"
+        )
+        ttk.Button(slideshow_btn_row, text="設定を解除", command=self._clear_slideshow_folder).pack(
+            side="left", padx=(6, 0)
+        )
+        row += 1
+
+        ttk.Label(form, text="1枚あたりの表示時間(秒)").grid(row=row, column=0, sticky="w", pady=4)
+        self.slideshow_interval_var = tk.StringVar(value=str(config.slideshow_interval_seconds))
+        ttk.Spinbox(form, from_=1, to=600, textvariable=self.slideshow_interval_var, width=8).grid(
+            row=row, column=1, sticky="w", pady=4
         )
         row += 1
 
@@ -2042,6 +2447,21 @@ class SystemSettingsWindow(tk.Toplevel):
         self._background_image_value = ""
         self.background_display_var.set(self._background_label_text(self._background_image_value))
 
+    @staticmethod
+    def _slideshow_label_text(value: str) -> str:
+        return value if value else "(未設定)"
+
+    def _browse_slideshow_folder(self) -> None:
+        path_str = filedialog.askdirectory(initialdir=str(self._config.media_root))
+        if not path_str:
+            return
+        self._slideshow_folder_value = self._config.to_media_relative(Path(path_str))
+        self.slideshow_display_var.set(self._slideshow_label_text(self._slideshow_folder_value))
+
+    def _clear_slideshow_folder(self) -> None:
+        self._slideshow_folder_value = ""
+        self.slideshow_display_var.set(self._slideshow_label_text(self._slideshow_folder_value))
+
     def _save(self) -> None:
         device_name = self.device_name_var.get().strip()
         link = LinkConfig(
@@ -2057,13 +2477,18 @@ class SystemSettingsWindow(tk.Toplevel):
             messagebox.showerror("入力エラー", "リンク機能を有効にする場合は、相手端末のIPアドレスを入力してください。")
             return
 
-        self._config.save_system_settings(device_name, link, self._background_image_value)
+        slideshow_interval_seconds = self._safe_int(self.slideshow_interval_var.get(), 1, 600, 8)
+        self._config.save_system_settings(
+            device_name, link, self._background_image_value, self._slideshow_folder_value,
+            slideshow_interval_seconds,
+        )
         self._on_saved()
         messagebox.showinfo(
             "保存しました",
             "設定を保存しました。相手端末のIP/ポート・ダッキング音量・監視間隔は次回の通信から反映されます。\n"
             "リンク機能の有効/無効・待受ポート番号の変更を反映するには、アプリを再起動してください。\n"
-            "待機画面の背景は、次に「ステージショーモード」をONにしたときから反映されます"
-            "(既に表示中の待機画面には即時反映されません)。",
+            "待機画面の背景は次に「ショー」に切り替えたときから、スライドショーのフォルダーは"
+            "次に「通常」に切り替えたときから反映されます(現在表示中の内容には即時反映されません)。\n"
+            "スライドの表示時間は、表示中でも次のスライド切替のタイミングから反映されます。",
         )
         self.destroy()

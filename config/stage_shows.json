@@ -10,7 +10,8 @@
           "lighting_cue": "funfun"
         }
       ],
-      "volume": 58
+      "volume": 58,
+      "black_background_on_gap": false
     },
     {
       "id": "fashion_show",
@@ -49,7 +50,8 @@
           "lighting_cue": "funfun"
         }
       ],
-      "volume": 66
+      "volume": 66,
+      "black_background_on_gap": false
     },
     {
       "id": "show_676363bc",
@@ -60,7 +62,8 @@
           "lighting_cue": "farewell"
         }
       ],
-      "volume": 100
+      "volume": 100,
+      "black_background_on_gap": false
     }
   ]
 }

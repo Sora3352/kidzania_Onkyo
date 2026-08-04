@@ -1,5 +1,5 @@
 {
-  "_comment": "自動再生スケジュール。common_jobsは営業モードに関わらず常時有効(街時計など)。modesは「通し営業」「2部制営業」ごとの個別スケジュール。manual_jobsはGUIの「手動追加」タブから追加したジョブ(モードに関わらず常時有効)。active_modeは現在GUIで選択されている営業モード。cronはAPScheduler CronTriggerの引数(hour/minuteを指定、hourを省略すると毎時実行。hourに'10-18'のような範囲を指定すると、その時間帯だけ毎時minute分に実行される)。fileはmedia_rootからの相対パス(絶対パスも可)。volumeは0-100。blackout_windowsは共通/モード別/手動追加を問わず全ジョブの再生を止める時間帯(start>endなら深夜またぎ扱い)。GUIの「スケジュール管理」画面から編集可能。",
+  "_comment": "自動再生スケジュール。common_jobsは営業モードに関わらず常時有効(街時計など)。modesは「通し営業」「2部制営業」ごとの個別スケジュール。manual_jobsはGUIの「手動追加」タブから追加したジョブ(モードに関わらず常時有効)。active_modeは現在GUIで選択されている営業モード。cronはAPScheduler CronTriggerの引数(hour/minuteを指定、hourを省略すると毎時実行。hourに'10-18'のような範囲を指定すると、その時間帯だけ毎時minute分に実行される)。fileはmedia_rootからの相対パス(絶対パスも可)。volumeは0-100。blackout_windowsは共通/モード別/手動追加を問わず全ジョブの再生を止める時間帯(start>endなら深夜またぎ扱い)。stage_show_scheduleはステージショーを時刻指定で自動再生する予定(stage_show_idでstage_shows.json側のショーを参照、modeは空文字なら両モード共通、指定時のみそのモードのみ有効。発火時は表示モードを自動的に「ショー」へ切り替えたうえで再生し、再生終了後は自動的に「通常」へ戻る。既に別動画を再生中/ミラーリング中なら自動再生をスキップしてログに記録するのみ)。GUIの「スケジュール管理」画面から編集可能。",
   "active_mode": "2部制営業",
   "common_jobs": [],
   "modes": {
@@ -290,6 +290,30 @@
       "playback_numbers": [
         48
       ]
+    }
+  ],
+  "stage_show_schedule": [
+    {
+      "id": "stageschedule_aa7e9cbf",
+      "stage_show_id": "fanfan_birthday",
+      "cron": {
+        "hour": 13,
+        "minute": 30
+      },
+      "enabled": true,
+      "clip_index": 0,
+      "mode": ""
+    },
+    {
+      "id": "stageschedule_88282cd3",
+      "stage_show_id": "fanfan_birthday",
+      "cron": {
+        "hour": 18,
+        "minute": 30
+      },
+      "enabled": true,
+      "clip_index": 0,
+      "mode": "2部制営業"
     }
   ]
 }

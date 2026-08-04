@@ -27,7 +27,7 @@ class ScheduleEntry:
     # 休止時間帯のみ終了時刻を持つ(範囲表示のため)。ジョブは単発発火なのでNone。
     end: Optional[time]
     label: str
-    kind: str  # "job" または "blackout"
+    kind: str  # "job" / "show" / "blackout"
 
 
 def _cron_fire_times_on_day(cron: dict, day: date) -> list[time]:
@@ -92,6 +92,29 @@ def build_daily_schedule(config: AppConfig, mode: str, day: Optional[date] = Non
                 continue
             entries.append(ScheduleEntry(start=t, end=None, label=job.name, kind="job"))
 
+    shows_by_id = {s.id: s for s in config.load_stage_shows()}
+    stage_jobs = [j for j in config.load_stage_show_schedule() if not j.mode or j.mode == mode]
+    for job in stage_jobs:
+        if not job.enabled:
+            continue
+        show = shows_by_id.get(job.stage_show_id)
+        if show is None:
+            continue
+        try:
+            fire_times = _cron_fire_times_on_day(job.cron, day)
+        except Exception:
+            continue
+
+        if job.window is not None:
+            start = time(job.window["start_hour"], job.window["start_minute"])
+            end = time(job.window["end_hour"], job.window["end_minute"])
+            fire_times = [t for t in fire_times if _time_in_range(t, start, end)]
+
+        for t in fire_times:
+            if _in_any_blackout(t):
+                continue
+            entries.append(ScheduleEntry(start=t, end=None, label=show.label, kind="show"))
+
     for w in blackouts:
         entries.append(
             ScheduleEntry(
@@ -125,6 +148,8 @@ def format_daily_schedule_text(mode: str, day: date, entries: list[ScheduleEntry
     for e in entries:
         if e.kind == "blackout":
             lines.append(f"{format_time_range(e.start, e.end)}  【休止時間帯】{e.label}")
+        elif e.kind == "show":
+            lines.append(f"{e.start:%H:%M}          【ショー】{e.label}")
         else:
             lines.append(f"{e.start:%H:%M}          {e.label}")
     return "\n".join(lines)

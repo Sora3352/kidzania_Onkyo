@@ -87,6 +87,38 @@ class StageShow:
 
 
 @dataclass
+class StageShowJob:
+    """ステージショーを時刻指定で自動再生するための予定1件。stage_show_idで
+    stage_shows.json側のStageShowを参照する(ショー自体の定義はここには
+    持たない)。clip_indexは複数動画のショー(ファッションショー等)で
+    どのクリップから再生を始めるか(既定0=先頭)。
+    modeはBlackoutWindow.modeと同じ考え方で、適用する営業モード名。空文字なら
+    営業モードを問わず常に適用される。"""
+
+    id: str
+    stage_show_id: str
+    cron: dict[str, Any]
+    enabled: bool = True
+    clip_index: int = 0
+    mode: str = ""
+    # 「時間帯」頻度の分単位の有効時間帯(ScheduledJob.windowと同じ形式)。
+    window: Optional[dict[str, int]] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "id": self.id,
+            "stage_show_id": self.stage_show_id,
+            "cron": self.cron,
+            "enabled": self.enabled,
+            "clip_index": self.clip_index,
+            "mode": self.mode,
+        }
+        if self.window is not None:
+            d["window"] = self.window
+        return d
+
+
+@dataclass
 class BlackoutWindow:
     """スケジュールジョブを一切実行しない時間帯(例: 12:00〜13:00は再生しない)。
     start > end の場合は深夜またぎ(例: 22:00〜翌2:00)として扱う。
@@ -197,6 +229,11 @@ class AppConfig:
     lighting: LightingConfig = field(init=False)
     # ステージショー待機画面の背景画像(media_root相対パス)。空文字なら黒背景。
     standby_background_image: str = field(init=False)
+    # 「通常」モードのスライドショーで表示する画像フォルダー(media_root相対パス)。
+    # 空文字なら何も表示しない(黒画面のまま)。
+    slideshow_folder: str = field(init=False)
+    # スライドショー1枚あたりの表示時間(秒)。
+    slideshow_interval_seconds: int = field(init=False)
     # 起動時にこのアプリ以外の音声セッションをミュートするか(HDMI出力事故防止)。
     mute_other_audio_on_startup: bool = field(init=False)
 
@@ -214,6 +251,8 @@ class AppConfig:
         self.link = LinkConfig.from_dict(settings.get("link", {}))
         self.lighting = LightingConfig.from_dict(settings.get("lighting", {}))
         self.standby_background_image = settings.get("standby_background_image", "")
+        self.slideshow_folder = settings.get("slideshow_folder", "")
+        self.slideshow_interval_seconds = int(settings.get("slideshow_interval_seconds", 8))
         self.mute_other_audio_on_startup = bool(settings.get("mute_other_audio_on_startup", True))
 
     # ------------------------------------------------------------------
@@ -354,6 +393,40 @@ class AppConfig:
         _write_json(self.stage_shows_path, data)
 
     # ------------------------------------------------------------------
+    # ショー予定(stage_show_schedule、schedule.json内。BlackoutWindowと同様
+    # 単一のフラットな一覧で、mode指定によって適用する営業モードを絞る)
+    # ------------------------------------------------------------------
+    def load_stage_show_schedule(self) -> list[StageShowJob]:
+        raw = self._read_schedule().get("stage_show_schedule", [])
+        jobs = []
+        for j in raw:
+            window = j.get("window")
+            if window is not None:
+                window = {
+                    "start_hour": int(window.get("start_hour", 0)),
+                    "start_minute": int(window.get("start_minute", 0)),
+                    "end_hour": int(window.get("end_hour", 23)),
+                    "end_minute": int(window.get("end_minute", 59)),
+                }
+            jobs.append(
+                StageShowJob(
+                    id=j["id"],
+                    stage_show_id=j["stage_show_id"],
+                    cron=j.get("cron", {}),
+                    enabled=bool(j.get("enabled", True)),
+                    clip_index=int(j.get("clip_index", 0)),
+                    mode=j.get("mode", ""),
+                    window=window,
+                )
+            )
+        return jobs
+
+    def save_stage_show_schedule(self, jobs: list[StageShowJob]) -> None:
+        data = self._read_schedule()
+        data["stage_show_schedule"] = [j.to_dict() for j in jobs]
+        _write_json(self.schedule_path, data)
+
+    # ------------------------------------------------------------------
     # 休止時間帯(blackout_windows)
     # ------------------------------------------------------------------
     def load_blackout_windows(self) -> list[BlackoutWindow]:
@@ -415,17 +488,27 @@ class AppConfig:
     # システム設定(端末名・リンク設定)
     # ------------------------------------------------------------------
     def save_system_settings(
-        self, device_name: str, link: LinkConfig, standby_background_image: str = ""
+        self,
+        device_name: str,
+        link: LinkConfig,
+        standby_background_image: str = "",
+        slideshow_folder: str = "",
+        slideshow_interval_seconds: int = 8,
     ) -> None:
         """GUIの「システム設定」画面から呼ばれる。settings.jsonに保存し、
-        メモリ上のdevice_name/link/standby_background_imageも即座に更新する
-        (peer_host/peer_port/duck_volume_percent/poll_interval_secondsは次回通信・
-        次回ポーリングから即座に反映される。enabled/listen_portの変更はサーバー
-        再起動が必要。standby_background_imageは次回ステージショーモードON時から
-        反映される)。"""
+        メモリ上のdevice_name/link/standby_background_image/slideshow_folder/
+        slideshow_interval_secondsも即座に更新する(peer_host/peer_port/
+        duck_volume_percent/poll_interval_secondsは次回通信・次回ポーリングから
+        即座に反映される。enabled/listen_portの変更はサーバー再起動が必要。
+        standby_background_imageは次回「ショー」表示への切り替え時から、
+        slideshow_folderは次回「通常」表示への切り替え時から反映される。
+        slideshow_interval_secondsはスライドショー表示中でも次のスライド切替
+        タイミングから反映される)。"""
         data = _read_json(self.settings_path)
         data["device_name"] = device_name
         data["standby_background_image"] = standby_background_image
+        data["slideshow_folder"] = slideshow_folder
+        data["slideshow_interval_seconds"] = slideshow_interval_seconds
         # 既存の"link"辞書を丸ごと差し替えるのではなく更新する。"_comment"等、
         # このアプリが関知しない既存キーを保存のたびに消してしまわないため。
         existing_link = data.get("link")
@@ -447,6 +530,8 @@ class AppConfig:
         self.device_name = device_name
         self.link = link
         self.standby_background_image = standby_background_image
+        self.slideshow_folder = slideshow_folder
+        self.slideshow_interval_seconds = slideshow_interval_seconds
 
     # ------------------------------------------------------------------
     # 内部ヘルパー

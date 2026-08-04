@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import AppConfig, BlackoutWindow, ScheduledJob
+from .config import AppConfig, BlackoutWindow, ScheduledJob, StageShowJob
 from .lighting import LightingController
 from .player import AudioCue
 
@@ -49,6 +49,14 @@ class JobScheduler:
         # 表示名(label)を渡して呼ぶ。
         self._on_playback_started = on_playback_started
         self._on_playback_ended = on_playback_ended
+        # ショー予定(stage_show_schedule)が発火した時のフック。GUI側(MainWindow)が
+        # 実際のショー再生・表示モード切替を担うため、ここではコールバックを呼ぶだけに
+        # とどめる(このクラス自体はTkinter/FullscreenVideoPlayerに依存しない)。
+        # 循環依存(MainWindowの生成にscheduler、schedulerのコールバックにMainWindowの
+        # メソッドが必要)を避けるため、コンストラクタ引数ではなくMainWindow側から
+        # 構築後に代入してもらう公開属性にしている。
+        # 引数は(stage_show_id, clip_index, ショー名)。
+        self.on_stage_show_triggered: Optional[Callable[[str, int, str], None]] = None
 
     def start(self) -> None:
         self._load_jobs()
@@ -90,28 +98,66 @@ class JobScheduler:
             )
             self._logger.info("ジョブを登録しました: %s (cron=%s)", job.name, job.cron)
 
+        self._load_stage_show_jobs(active_mode)
+
+    def _load_stage_show_jobs(self, active_mode: str) -> None:
+        shows_by_id = {s.id: s for s in self._config.load_stage_shows()}
+        stage_jobs = [
+            j for j in self._config.load_stage_show_schedule() if not j.mode or j.mode == active_mode
+        ]
+        for job in stage_jobs:
+            if not job.enabled:
+                self._logger.info("無効化されているショー予定をスキップ: %s", job.id)
+                continue
+            show = shows_by_id.get(job.stage_show_id)
+            if show is None:
+                self._logger.warning(
+                    "ショー予定の参照先が見つかりません(ショーが削除された可能性があります): %s",
+                    job.stage_show_id,
+                )
+                continue
+            try:
+                trigger = CronTrigger(**job.cron)
+            except Exception:
+                self._logger.exception("cron設定が不正です(%s): %s", show.label, job.cron)
+                continue
+
+            self._scheduler.add_job(
+                self._make_stage_show_runner(job, show.label),
+                trigger=trigger,
+                id=job.id,
+                name=show.label,
+                replace_existing=True,
+            )
+            self._logger.info("ショー予定を登録しました: %s (cron=%s)", show.label, job.cron)
+
+    def _should_skip(self, job_id: str, job_name: str, window: Optional[dict], now: datetime) -> bool:
+        """次回スキップ・休止時間帯・(「時間帯」頻度の場合の)有効時間帯外を
+        判定する。音源ジョブ・ショー予定の両方の発火時チェックで共通して使う。
+        スキップすべき場合は理由をログに残したうえでTrueを返す。"""
+        if job_id in self._skip_once:
+            self._skip_once.discard(job_id)
+            self._logger.info("次回をスキップしました: %s", job_name)
+            return True
+
+        blackout = self._find_active_blackout(now)
+        if blackout is not None:
+            self._logger.info("休止時間帯(%s)のため再生をスキップしました: %s", blackout.label, job_name)
+            return True
+
+        if window is not None:
+            start = time(window["start_hour"], window["start_minute"])
+            end = time(window["end_hour"], window["end_minute"])
+            if not _time_in_range(now.time(), start, end):
+                self._logger.info("設定時間帯外のため再生をスキップしました: %s", job_name)
+                return True
+
+        return False
+
     def _make_runner(self, job: ScheduledJob) -> Callable[[], None]:
         def _run() -> None:
-            if job.id in self._skip_once:
-                self._skip_once.discard(job.id)
-                self._logger.info("次回をスキップしました: %s", job.name)
+            if self._should_skip(job.id, job.name, job.window, datetime.now()):
                 return
-
-            now = datetime.now()
-
-            blackout = self._find_active_blackout(now)
-            if blackout is not None:
-                self._logger.info(
-                    "休止時間帯(%s)のため再生をスキップしました: %s", blackout.label, job.name
-                )
-                return
-
-            if job.window is not None:
-                start = time(job.window["start_hour"], job.window["start_minute"])
-                end = time(job.window["end_hour"], job.window["end_minute"])
-                if not _time_in_range(now.time(), start, end):
-                    self._logger.info("設定時間帯外のため再生をスキップしました: %s", job.name)
-                    return
 
             cue = AudioCue(self._vlc_instance, self._logger)
             path = self._config.resolve_media(job.file)
@@ -126,6 +172,17 @@ class JobScheduler:
                 self._on_playback_started(job.name)
             self._lighting.trigger_cue(job.lighting_cue)
             cue.play(path, job.volume, job.name, on_finished=_on_finished)
+
+        return _run
+
+    def _make_stage_show_runner(self, job: StageShowJob, show_label: str) -> Callable[[], None]:
+        def _run() -> None:
+            if self._should_skip(job.id, show_label, job.window, datetime.now()):
+                return
+            if self.on_stage_show_triggered is None:
+                self._logger.warning("ショー予定の発火ハンドラが未設定のため再生できません: %s", show_label)
+                return
+            self.on_stage_show_triggered(job.stage_show_id, job.clip_index, show_label)
 
         return _run
 
@@ -154,11 +211,13 @@ class JobScheduler:
         return [(job_id, name) for job_id, (name, _cue) in self._active_cues.items()]
 
     def stop_active_cue(self, job_id: str) -> None:
+        """通常の手動停止(フェードアウト)。GUIの「現在再生中」パネルの
+        個別「■ 停止」ボタンから呼ばれる(緊急停止はstop_all_active()を使う)。"""
         entry = self._active_cues.pop(job_id, None)
         if entry is not None:
             name, cue = entry
-            cue.stop()
-            self._logger.info("再生を手動停止しました: %s", name)
+            cue.fade_out_and_stop()
+            self._logger.info("再生をフェードアウトで停止しました: %s", name)
 
     def set_active_volume(self, job_id: str, percent: int) -> None:
         """再生中ジョブの音量をリアルタイムで変更する(不具合による大音量再生への
@@ -217,6 +276,11 @@ class JobScheduler:
             self._logger.info("ダッキングを解除しました")
 
     def stop_all_active(self) -> None:
-        """現在再生中の全ジョブを停止する(連携先からの一括停止要求向け)。"""
+        """緊急停止向け: 現在再生中の全ジョブを即座に(フェードなしで)停止する
+        (連携先からの一括停止要求からも呼ばれる)。"""
         for job_id in list(self._active_cues.keys()):
-            self.stop_active_cue(job_id)
+            entry = self._active_cues.pop(job_id, None)
+            if entry is not None:
+                name, cue = entry
+                cue.stop()
+                self._logger.info("再生を即時停止しました(緊急): %s", name)
